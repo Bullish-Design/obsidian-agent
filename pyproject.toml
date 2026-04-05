@@ -1,7 +1,7 @@
 [project]
-name = "template-py"
+name = "obsidian-agent"
 version = "0.1.0"
-description = "A Python project template with modern tooling."
+description = "Obsidian agent service for vault operations."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -12,27 +12,32 @@ authors = [
 
 dependencies = [
   "pydantic>=2.12.5",
+  "pydantic-settings>=2.0.0",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.34.0",
+  "openai>=1.60.0",
+  "httpx>=0.28.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
+  "pytest-asyncio>=0.24.0",
   "pytest-cov>=4.1",
-  "mypy>=1.10",
   "ruff>=0.5.0",
 ]
 
 #[project.urls]
-#homepage = "https://github.com/Bullish-Design/template-py"
-#repository = "https://github.com/Bullish-Design/template-py.git"
+#homepage = "https://github.com/Bullish-Design/obsidian-agent"
+#repository = "https://github.com/Bullish-Design/obsidian-agent.git"
 
 [build-system]
 requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# Tell hatch which package to ship (your code lives in src/template_py)
-packages = ["src/template_py"]
+# Tell hatch which package to ship (your code lives in src/obsidian_agent)
+packages = ["src/obsidian_agent"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -48,12 +53,12 @@ include = [
 # Keep the default behavior; this section is here so you can extend it later if needed.
 
 [tool.pytest.ini_options]
-addopts = "-q --cov=embeddify --cov-report=term-missing"
+addopts = "-q --cov=obsidian_agent --cov-report=term-missing"
 testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.13"
-packages = ["src/template_py"]
+packages = ["obsidian_agent"]
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
@@ -82,4 +87,3 @@ ignore = []
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
-

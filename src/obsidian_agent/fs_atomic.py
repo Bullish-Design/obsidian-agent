@@ -1,0 +1,1 @@
+"""Filesystem atomic operations placeholder."""

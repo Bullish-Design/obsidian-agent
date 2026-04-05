@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
@@ -17,7 +16,7 @@ from obsidian_agent.vcs import JujutsuHistory
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = get_agent_settings()
     jj = JujutsuHistory(settings.vault_dir, settings.jj_bin)
     await jj.ensure_workspace()
@@ -79,7 +78,7 @@ async def apply(request: ApplyRequest) -> OperationResult:
             summary=result["summary"],
             changed_files=result["changed_files"],
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return OperationResult(
             ok=False,
             updated=False,
@@ -110,7 +109,7 @@ async def undo() -> OperationResult:
             summary="Last change undone.",
             changed_files=[],
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return OperationResult(
             ok=False,
             updated=False,

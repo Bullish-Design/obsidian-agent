@@ -120,10 +120,9 @@ def test_apply_agent_failure(app):
 
 
 def test_apply_timeout(app):
-    import asyncio
 
     fastapi_app, mock_agent, _, _, mock_settings = app
-    mock_agent.run = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_agent.run = AsyncMock(side_effect=TimeoutError())
     mock_settings.operation_timeout_s = 120
 
     client = TestClient(fastapi_app)

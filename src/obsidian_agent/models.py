@@ -1,4 +1,3 @@
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -8,7 +7,7 @@ class ApplyRequest(BaseModel):
 
     instruction: str
     current_url_path: str
-    current_file_path: Optional[str] = None
+    current_file_path: str | None = None
 
 
 class OperationResult(BaseModel):
@@ -18,5 +17,5 @@ class OperationResult(BaseModel):
     updated: bool
     summary: str = ""
     changed_files: list[str] = []
-    warning: Optional[str] = None
-    error: Optional[str] = None
+    warning: str | None = None
+    error: str | None = None

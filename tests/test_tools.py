@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from obsidian_agent.fs_atomic import write_file_atomic
 from obsidian_agent.locks import FileLockManager
 from obsidian_agent.tools import ToolRuntime, get_tool_definitions
 from obsidian_agent.vcs import JujutsuHistory

@@ -1,2 +1,7 @@
 .codex
 .codex/
+.devenv/
+.devenv.flake.nix
+.pytest_cache/
+__pycache__/
+*.pyc

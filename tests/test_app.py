@@ -1,31 +1,49 @@
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from obsidian_agent.agent import Agent, BusyError
 from obsidian_agent.app import create_app
 from obsidian_agent.config import AgentConfig
 from obsidian_agent.models import RunResult
+from tests.support.vault_fs import VaultWorkspace
 
 
-@pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    vault_dir = tmp_path / "vault"
-    vault_dir.mkdir()
-    (vault_dir / "note.md").write_text("# Test\nContent.\n")
+def text_only_model(text: str) -> FunctionModel:
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        return ModelResponse(parts=[TextPart(text)])
 
-    vault = Vault(str(vault_dir))
-    config = AgentConfig(vault_dir=vault_dir)
-    agent = Agent(config, vault)
+    return FunctionModel(model_fn)
+
+
+def write_note_model(new_content: str) -> FunctionModel:
+    turn = {"value": 0}
 
     def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         _ = messages, info
-        return ModelResponse(parts=[TextPart("No changes needed")])
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": new_content})])
+        return ModelResponse(parts=[TextPart("Updated note")])
+
+    return FunctionModel(model_fn)
+
+
+@pytest.fixture
+def app_workspace(vault_workspace_factory) -> VaultWorkspace:
+    return vault_workspace_factory("app")
+
+
+@pytest.fixture
+def client(app_workspace: VaultWorkspace, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    vault = Vault(str(app_workspace.work_dir))
+    config = AgentConfig(vault_dir=app_workspace.work_dir)
+    agent = Agent(config, vault)
 
     def commit_noop(message: str) -> None:
         _ = message
@@ -37,7 +55,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(vault, "undo", undo_noop)
 
     app = create_app(agent)
-    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+    with agent._pydantic_agent.override(model=text_only_model("No changes needed")):
         with TestClient(app, raise_server_exceptions=False) as test_client:
             yield test_client
 
@@ -163,10 +181,34 @@ def test_apply_vault_busy_returns_409(client: TestClient, monkeypatch: pytest.Mo
     assert response.json()["detail"] == "vault is busy elsewhere"
 
 
-def test_default_app_lifespan_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    vault_dir = tmp_path / "vault"
-    vault_dir.mkdir()
-    monkeypatch.setenv("AGENT_VAULT_DIR", str(vault_dir))
+def test_post_apply_mutates_file_on_disk(
+    app_workspace: VaultWorkspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = Vault(str(app_workspace.work_dir))
+    config = AgentConfig(vault_dir=app_workspace.work_dir)
+    agent = Agent(config, vault)
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+
+    app = create_app(agent)
+    with agent._pydantic_agent.override(model=write_note_model("# Test\nUpdated from API.\n")):
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = test_client.post("/api/apply", json={"instruction": "Update note content"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["updated"] is True
+    assert "note.md" in payload["changed_files"]
+    assert vault.read_file("note.md") == "# Test\nUpdated from API.\n"
+
+
+def test_default_app_lifespan_from_env(monkeypatch: pytest.MonkeyPatch, app_workspace: VaultWorkspace) -> None:
+    monkeypatch.setenv("AGENT_VAULT_DIR", str(app_workspace.work_dir))
 
     app = create_app()
     with TestClient(app, raise_server_exceptions=False) as test_client:

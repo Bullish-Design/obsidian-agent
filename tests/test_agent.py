@@ -196,6 +196,56 @@ async def test_undo_success(agent: Agent, vault: Vault, monkeypatch: pytest.Monk
     assert result.summary == "Last change undone."
 
 
+async def test_undo_invokes_jj_restore_with_expected_args(
+    agent: Agent,
+    vault: Vault,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def undo_noop() -> None:
+        return None
+
+    def run_spy(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"cmd": cmd, "kwargs": kwargs})
+        return None
+
+    monkeypatch.setattr(vault, "undo", undo_noop)
+    monkeypatch.setattr("obsidian_agent.agent.subprocess.run", run_spy)
+
+    result = await agent.undo()
+
+    assert result.ok is True
+    assert result.warning is None
+    assert len(calls) == 1
+    first = calls[0]
+    assert first["cmd"] == [agent.config.jj_bin, "restore", "--from", "@-"]
+    assert first["kwargs"]["cwd"] == vault.root
+    assert first["kwargs"]["timeout"] == agent.config.jj_timeout
+
+
+async def test_undo_sets_warning_when_restore_fails(
+    agent: Agent,
+    vault: Vault,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def undo_noop() -> None:
+        return None
+
+    def run_fail(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        _ = cmd, kwargs
+        raise RuntimeError("restore failed")
+
+    monkeypatch.setattr(vault, "undo", undo_noop)
+    monkeypatch.setattr("obsidian_agent.agent.subprocess.run", run_fail)
+
+    result = await agent.undo()
+
+    assert result.ok is True
+    assert result.warning is not None
+    assert "restore after undo failed" in result.warning
+
+
 async def test_undo_failure(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
     def undo_fail() -> None:
         raise RuntimeError("boom")
@@ -232,6 +282,36 @@ async def test_commit_failure_after_changes(agent: Agent, vault: Vault, monkeypa
     assert result.ok is True
     assert result.warning is not None
     assert "Commit failed" in result.warning
+
+
+async def test_commit_uses_normalized_instruction_message(
+    agent: Agent,
+    vault: Vault,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turn = {"value": 0}
+    commit_messages: list[str] = []
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    def commit_spy(message: str) -> None:
+        commit_messages.append(message)
+
+    monkeypatch.setattr(vault, "commit", commit_spy)
+
+    instruction = "   This   is   a   very   long   instruction   " + ("x" * 200)
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run(instruction)
+
+    assert result.ok is True
+    assert len(commit_messages) == 1
+    assert commit_messages[0] == Agent._normalize_commit_message(instruction)
 
 
 async def test_model_api_error_is_reported(agent: Agent) -> None:

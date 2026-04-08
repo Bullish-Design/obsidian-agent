@@ -11,23 +11,22 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from obsidian_agent.agent import Agent
 from obsidian_agent.app import create_app
 from obsidian_agent.config import AgentConfig
+from tests.support.vault_fs import VaultWorkspace
 
 pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def integration_vault(tmp_path: Path) -> Vault:
+def integration_workspace(vault_workspace_factory) -> VaultWorkspace:
+    return vault_workspace_factory("integration")
+
+
+@pytest.fixture
+def integration_vault(integration_workspace: VaultWorkspace) -> Vault:
     if shutil.which("jj") is None:
         pytest.skip("jj is required for integration tests")
 
-    vault_dir = tmp_path / "demo-vault"
-    vault_dir.mkdir()
-    (vault_dir / "README.md").write_text("# Demo Vault\n")
-    (vault_dir / "Projects").mkdir()
-    (vault_dir / "Projects/Alpha.md").write_text("---\nstatus: draft\n---\n# Alpha\nOriginal alpha content.\n")
-    (vault_dir / "Projects/Beta.md").write_text("---\nstatus: active\n---\n# Beta\n")
-    (vault_dir / "Daily").mkdir()
-    (vault_dir / "Daily/2025-01-01.md").write_text("# Daily\n")
+    vault_dir = integration_workspace.work_dir
 
     subprocess.run(["jj", "git", "init", str(vault_dir)], check=True, capture_output=True, text=True)
     subprocess.run(
@@ -121,19 +120,29 @@ async def test_multiple_file_changes_in_one_run(integration_agent: Agent) -> Non
     assert sorted(result.changed_files) == ["Projects/Alpha.md", "Projects/Beta.md"]
 
 
-async def test_http_integration_apply_and_undo(integration_agent: Agent) -> None:
+async def test_http_integration_apply_and_undo(integration_agent: Agent, integration_vault: Vault) -> None:
+    original = integration_vault.read_file("Projects/Alpha.md")
+    turn = {"value": 0}
+
     def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         _ = messages, info
-        return ModelResponse(parts=[TextPart("No changes")])
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(
+                parts=[ToolCallPart("write_file", {"path": "Projects/Alpha.md", "content": "# Alpha\nHTTP write + undo.\n"})]
+            )
+        return ModelResponse(parts=[TextPart("Updated through HTTP")])
 
     app = create_app(integration_agent)
     with integration_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
         with TestClient(app, raise_server_exceptions=False) as client:
-            apply_response = client.post("/api/apply", json={"instruction": "Check vault"})
+            apply_response = client.post("/api/apply", json={"instruction": "Write and verify undo"})
             undo_response = client.post("/api/undo")
 
     assert apply_response.status_code == 200
     assert undo_response.status_code == 200
+    assert integration_vault.read_file("Projects/Alpha.md") == original
 
 
 async def test_http_integration_apply_write_path(integration_agent: Agent, integration_vault: Vault) -> None:

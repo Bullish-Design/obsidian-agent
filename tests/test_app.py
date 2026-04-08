@@ -96,10 +96,13 @@ def test_apply_response_schema(client: TestClient) -> None:
     assert "warning" in data
 
 
-def test_post_apply_missing_instruction_returns_422(client: TestClient) -> None:
+def test_post_apply_missing_instruction_returns_200_error(client: TestClient) -> None:
     response = client.post("/api/apply", json={})
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"] == "instruction is required"
 
 
 def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

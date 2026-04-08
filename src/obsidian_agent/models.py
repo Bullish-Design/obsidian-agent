@@ -14,7 +14,7 @@ class RunResult:
 
 
 class ApplyRequest(BaseModel):
-    instruction: str
+    instruction: str | None = None
     current_file: str | None = None
 
 

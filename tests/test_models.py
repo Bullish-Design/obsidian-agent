@@ -43,3 +43,10 @@ def test_apply_request_with_current_file() -> None:
 
     assert request.instruction == "do stuff"
     assert request.current_file == "Projects/Alpha.md"
+
+
+def test_apply_request_missing_instruction_defaults_to_none() -> None:
+    request = ApplyRequest()
+
+    assert request.instruction is None
+    assert request.current_file is None

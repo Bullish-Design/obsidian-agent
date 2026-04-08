@@ -24,7 +24,7 @@ curl -sS http://127.0.0.1:8081/api/health
 # Apply an instruction
 curl -sS -X POST http://127.0.0.1:8081/api/apply \
   -H 'Content-Type: application/json' \
-  -d '{"instruction":"Add a summary section","current_url_path":"/"}'
+  -d '{"instruction":"Add a summary section","current_file":"index.md"}'
 
 # Undo the last change
 curl -sS -X POST http://127.0.0.1:8081/api/undo

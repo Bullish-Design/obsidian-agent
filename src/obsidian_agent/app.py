@@ -40,7 +40,7 @@ def create_app(agent: Agent | None = None) -> FastAPI:
     async def apply_instruction(request: ApplyRequest) -> OperationResult:
         active_agent: Agent = app.state.agent
 
-        if not request.instruction.strip():
+        if request.instruction is None or not request.instruction.strip():
             return OperationResult(ok=False, updated=False, summary="", error="instruction is required")
 
         try:

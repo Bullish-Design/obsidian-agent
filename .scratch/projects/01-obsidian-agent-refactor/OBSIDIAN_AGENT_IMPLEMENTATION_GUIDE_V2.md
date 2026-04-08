@@ -171,7 +171,7 @@ class RunResult:
 
 
 class ApplyRequest(BaseModel):
-    instruction: str
+    instruction: str | None = None
     current_file: str | None = None
 
 
@@ -732,14 +732,11 @@ app = FastAPI(lifespan=lifespan)
 async def apply_instruction(request: ApplyRequest):
     agent: Agent = app.state.agent
 
-    if not request.instruction.strip():
+    if request.instruction is None or not request.instruction.strip():
         return OperationResult(ok=False, updated=False, summary="", error="instruction is required")
 
     try:
-        result = await asyncio.wait_for(
-            agent.run(request.instruction, request.current_file),
-            timeout=agent.config.operation_timeout,
-        )
+        result = await agent.run(request.instruction, request.current_file)
         return OperationResult(
             ok=result.ok,
             updated=result.updated,
@@ -747,11 +744,6 @@ async def apply_instruction(request: ApplyRequest):
             changed_files=result.changed_files,
             error=result.error,
             warning=result.warning,
-        )
-    except asyncio.TimeoutError:
-        return OperationResult(
-            ok=False, updated=False, summary="",
-            error=f"Operation timed out after {agent.config.operation_timeout}s",
         )
     except BusyError:
         raise HTTPException(status_code=409, detail="Another operation is already running")

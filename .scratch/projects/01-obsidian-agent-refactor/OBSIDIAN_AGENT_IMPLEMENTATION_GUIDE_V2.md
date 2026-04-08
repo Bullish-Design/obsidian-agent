@@ -312,7 +312,7 @@ async def read_file(ctx: RunContext[VaultDeps], path: str) -> str:
         return ctx.deps.vault.read_file(path)
     except BusyError:
         raise
-    except VaultError as e:
+    except (VaultError, FileNotFoundError) as e:
         return f"Error: {e}"
 ```
 
@@ -327,7 +327,7 @@ async def write_file(ctx: RunContext[VaultDeps], path: str, content: str) -> str
         return f"Successfully wrote {path}"
     except BusyError:
         raise
-    except VaultError as e:
+    except (VaultError, FileNotFoundError) as e:
         return f"Error: {e}"
 ```
 
@@ -1063,11 +1063,11 @@ vault.undo()
 
 | Layer | Error | Handling |
 |-------|-------|----------|
-| Tool function | `VaultError` (any subclass except `BusyError`) | Catch, return `"Error: {e}"` string to LLM |
+| Tool function | `VaultError` and `FileNotFoundError` (except `BusyError`) | Catch, return `"Error: {e}"` string to LLM |
 | Tool function | `BusyError` | Re-raise (should never happen if agent lock works) |
 | Agent `run()` | `BusyError` (agent-level) | Raise to caller |
-| Agent `_run_impl()` | Any exception from pydantic-ai | Catch, return `RunResult(ok=False, error=...)` |
+| Agent `_run_impl()` | `UsageLimitExceeded` / `ModelAPIError` | Return `RunResult(ok=False, error=...)` |
+| Agent `_run_impl()` | `obsidian_ops.errors.BusyError` | Re-raise so HTTP can return 409 |
 | Agent `_run_impl()` | Commit failure after changes | Catch, set `warning`, return `ok=True` |
 | HTTP endpoint | `BusyError` | Return HTTP 409 |
-| HTTP endpoint | `asyncio.TimeoutError` | Return `OperationResult(ok=False, error="timed out")` |
-| HTTP endpoint | Everything else | Application-level error in 200 response with `ok=False` |
+| HTTP endpoint | Timeout | Delegated to `Agent.run()` result (`ok=False`, timeout error message) |

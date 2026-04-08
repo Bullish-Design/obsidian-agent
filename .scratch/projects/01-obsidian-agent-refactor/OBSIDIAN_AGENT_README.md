@@ -175,7 +175,7 @@ result = await agent.undo()
 # result.summary → "Last change undone."
 ```
 
-**Limitation**: `undo()` calls `vault.undo()` which runs `jj undo`. This undoes the last jj operation. If other jj operations happened between the agent's commit and the undo request, `jj undo` will undo *that* operation instead. For v1 this is acceptable.
+**Limitation**: `undo()` calls `vault.undo()` (`jj undo`) and then attempts `jj restore --from @-` to restore working-copy content. If unrelated jj operations intervened, or repo history is unusual, undo can still target an unexpected operation or fail to restore exactly.
 
 ---
 
@@ -378,7 +378,7 @@ async def write_block(ctx: RunContext[VaultDeps], path: str, block_id: str, cont
 
 ### Error handling in tools
 
-Tool errors from obsidian-ops are caught and returned as `"Error: ..."` strings. The LLM sees the error and can decide how to proceed (try a different path, explain to the user, etc.). This is not a loop-terminating condition.
+Tool errors from obsidian-ops (plus `FileNotFoundError` for missing files) are caught and returned as `"Error: ..."` strings. The LLM sees the error and can decide how to proceed (try a different path, explain to the user, etc.). This is not a loop-terminating condition.
 
 ```python
 # Wrapping pattern (applied to each tool):
@@ -386,7 +386,7 @@ try:
     return ctx.deps.vault.read_file(path)
 except BusyError:
     raise  # Re-raise — indicates concurrency bug, not recoverable tool error
-except VaultError as e:
+except (VaultError, FileNotFoundError) as e:
     return f"Error: {e}"
 ```
 

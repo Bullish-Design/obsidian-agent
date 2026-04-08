@@ -21,6 +21,10 @@ dev = [
     "coverage>=7.0",
 ]
 
+[project.scripts]
+obsidian-agent = "obsidian_agent.__main__:main"
+obsidian-agent-demo = "obsidian_agent.demo:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

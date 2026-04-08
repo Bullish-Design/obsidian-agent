@@ -45,7 +45,9 @@ def integration_vault(tmp_path: Path) -> Vault:
         text=True,
     )
 
-    return Vault(str(vault_dir))
+    vault = Vault(str(vault_dir))
+    vault.commit("baseline integration state")
+    return vault
 
 
 @pytest.fixture
@@ -55,6 +57,7 @@ def integration_agent(integration_vault: Vault) -> Agent:
 
 
 async def test_apply_verify_and_undo_operation(integration_agent: Agent, integration_vault: Vault) -> None:
+    original_content = integration_vault.read_file("Projects/Alpha.md")
     turn = {"value": 0}
 
     def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -81,6 +84,7 @@ async def test_apply_verify_and_undo_operation(integration_agent: Agent, integra
 
     assert undo_result.ok is True
     assert undo_result.summary == "Last change undone."
+    assert integration_vault.read_file("Projects/Alpha.md") == original_content
 
 
 async def test_apply_with_no_changes(integration_agent: Agent, integration_vault: Vault) -> None:
@@ -130,3 +134,29 @@ async def test_http_integration_apply_and_undo(integration_agent: Agent) -> None
 
     assert apply_response.status_code == 200
     assert undo_response.status_code == 200
+
+
+async def test_http_integration_apply_write_path(integration_agent: Agent, integration_vault: Vault) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(
+                parts=[ToolCallPart("write_file", {"path": "Projects/Alpha.md", "content": "# Alpha\nHTTP integration update.\n"})]
+            )
+        return ModelResponse(parts=[TextPart("Updated through HTTP")])
+
+    app = create_app(integration_agent)
+    with integration_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/api/apply", json={"instruction": "Update Alpha through API"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["updated"] is True
+    assert "Projects/Alpha.md" in payload["changed_files"]
+    assert "HTTP integration update." in integration_vault.read_file("Projects/Alpha.md")

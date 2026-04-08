@@ -5,7 +5,7 @@ from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import UsageLimits
 
@@ -42,7 +42,7 @@ class Agent:
 
         register_tools(self._pydantic_agent)
 
-    def _build_model(self) -> str | OpenAIModel:
+    def _build_model(self) -> str | OpenAIChatModel:
         if self.config.llm_base_url is None:
             return self.config.llm_model
 
@@ -54,7 +54,7 @@ class Agent:
         if self._is_generic_model_name(configured_model):
             selected_model = self._resolve_model_name_from_base_url(self.config.llm_base_url)
 
-        return OpenAIModel(
+        return OpenAIChatModel(
             selected_model,
             provider=OpenAIProvider(base_url=self.config.llm_base_url),
         )

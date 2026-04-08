@@ -7,7 +7,7 @@ from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 
 from obsidian_agent.agent import Agent, BusyError
 from obsidian_agent.config import AgentConfig
@@ -316,7 +316,7 @@ def test_build_model_with_openai_auto_uses_resolved_model(vault: Vault, monkeypa
 
     model = instance._build_model()
 
-    assert isinstance(model, OpenAIModel)
+    assert isinstance(model, OpenAIChatModel)
 
 
 def test_resolve_model_name_prefers_instruct(agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:

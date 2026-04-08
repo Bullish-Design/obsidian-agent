@@ -3,8 +3,8 @@ name = "obsidian-agent"
 version = "0.1.1"
 requires-python = ">=3.13"
 dependencies = [
-    "obsidian-ops @ git+https://github.com/Bullish-Design/obsidian-ops.git",
-    "pydantic-ai>=1.7",
+    "obsidian-ops @ git+https://github.com/Bullish-Design/obsidian-ops.git@9a798c2ddfccdd63b3ec3673c0269000d1ea0d6c",
+    "pydantic-ai>=1.7,<2.0",
     "pydantic>=2.12.0",
     "pydantic-settings>=2.0.0",
     "fastapi>=0.115.0",

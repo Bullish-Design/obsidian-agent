@@ -20,22 +20,19 @@ from obsidian_agent.tools import (
     write_file,
     write_heading,
 )
+from tests.support.vault_fs import VaultWorkspace
 
 pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def vault(tmp_path: Path) -> Vault:
-    vault_dir = tmp_path / "vault"
-    vault_dir.mkdir()
+def tools_workspace(vault_workspace_factory) -> VaultWorkspace:
+    return vault_workspace_factory("tools")
 
-    (vault_dir / "note.md").write_text("---\ntitle: Test\n---\n# Hello\nContent here.\n")
-    (vault_dir / "plain.md").write_text("# Plain\nNo frontmatter.\n")
-    (vault_dir / "Projects").mkdir()
-    (vault_dir / "Projects/Alpha.md").write_text("---\nstatus: draft\n---\n# Alpha\nAlpha content.\n")
-    (vault_dir / "block.md").write_text("# Block\n\nParagraph with block ref ^my-block\n")
 
-    return Vault(str(vault_dir))
+@pytest.fixture
+def vault(tools_workspace: VaultWorkspace) -> Vault:
+    return Vault(str(tools_workspace.work_dir))
 
 
 @pytest.fixture
@@ -163,6 +160,19 @@ async def test_path_error_returns_error_string(deps: VaultDeps) -> None:
     assert result.startswith("Error:")
 
 
+async def test_path_error_does_not_modify_outside_workspace(
+    tools_workspace: VaultWorkspace,
+    deps: VaultDeps,
+) -> None:
+    sentinel = tools_workspace.workspace_root / "outside.txt"
+    sentinel.write_text("keep-me")
+
+    result = await write_file(make_ctx(deps), "../../outside.txt", "mutated")
+
+    assert result.startswith("Error:")
+    assert sentinel.read_text() == "keep-me"
+
+
 async def test_busy_error_reraises() -> None:
     class BusyVault:
         def read_file(self, path: str) -> str:
@@ -178,6 +188,25 @@ async def test_read_block_not_found_returns_message(deps: VaultDeps) -> None:
     result = await read_block(make_ctx(deps), "block.md", "^missing-block")
 
     assert "not found" in result
+
+
+async def test_write_heading_creates_missing_heading(vault: Vault, deps: VaultDeps) -> None:
+    result = await write_heading(make_ctx(deps), "plain.md", "## Added", "Fresh content")
+
+    assert result == "Updated heading '## Added' in plain.md"
+    content = vault.read_file("plain.md")
+    assert "## Added" in content
+    assert "Fresh content" in content
+    assert "plain.md" in deps.changed_files
+
+
+async def test_changed_files_deduplicates_multiple_writes(deps: VaultDeps) -> None:
+    first = await write_file(make_ctx(deps), "note.md", "one")
+    second = await write_file(make_ctx(deps), "note.md", "two")
+
+    assert first == "Successfully wrote note.md"
+    assert second == "Successfully wrote note.md"
+    assert sorted(deps.changed_files) == ["note.md"]
 
 
 @pytest.mark.parametrize(

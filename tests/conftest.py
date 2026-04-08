@@ -25,5 +25,25 @@ def vault_workspace(request: pytest.FixtureRequest, test_run_id: str) -> VaultWo
 
 
 @pytest.fixture
+def vault_workspace_factory(request: pytest.FixtureRequest, test_run_id: str):
+    workspaces: list[VaultWorkspace] = []
+
+    def factory(fixture_name: str, *, label: str | None = None) -> VaultWorkspace:
+        nodeid = request.node.nodeid if label is None else f"{request.node.nodeid}::{label}"
+        workspace = create_vault_workspace(
+            fixture_name=fixture_name,
+            test_nodeid=nodeid,
+            run_id=test_run_id,
+        )
+        workspaces.append(workspace)
+        return workspace
+
+    yield factory
+
+    for workspace in workspaces:
+        finalize_vault_workspace(workspace)
+
+
+@pytest.fixture
 def vault(vault_workspace: VaultWorkspace) -> Vault:
     return Vault(str(vault_workspace.work_dir))

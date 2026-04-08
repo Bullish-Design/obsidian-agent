@@ -1,6 +1,6 @@
 [project]
 name = "obsidian-agent"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.13"
 dependencies = [
     "obsidian-ops @ git+https://github.com/Bullish-Design/obsidian-ops.git",

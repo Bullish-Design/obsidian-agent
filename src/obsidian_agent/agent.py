@@ -103,7 +103,12 @@ class Agent:
             if "instruct" in model_id.lower():
                 return model_id
 
-        return model_ids[0]
+        available = ", ".join(model_ids)
+        msg = (
+            f"Multiple models returned from {base_url}/models, but none matched "
+            f"an instruct model: {available}"
+        )
+        raise ValueError(msg)
 
     @staticmethod
     def _normalize_commit_message(instruction: str) -> str:

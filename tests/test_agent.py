@@ -337,3 +337,17 @@ def test_resolve_model_name_raises_when_empty(agent: Agent, monkeypatch: pytest.
 
     with pytest.raises(ValueError):
         agent._resolve_model_name_from_base_url("http://localhost:8000/v1")
+
+
+def test_resolve_model_name_raises_when_no_instruct_match(agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"data": [{"id": "embedding-model"}, {"id": "base-chat-model"}]}
+
+    monkeypatch.setattr("obsidian_agent.agent.httpx.get", lambda url, timeout: DummyResponse())
+
+    with pytest.raises(ValueError, match="none matched an instruct model"):
+        agent._resolve_model_name_from_base_url("http://localhost:8000/v1")

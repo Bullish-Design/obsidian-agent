@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import filecmp
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -31,7 +32,11 @@ def _safe_name(value: str) -> str:
 
 
 def build_run_id() -> str:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    from_env = os.environ.get("OBSIDIAN_AGENT_TEST_RUN_ID", "").strip()
+    if from_env:
+        return _safe_name(from_env)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     return f"run-{timestamp}"
 
 

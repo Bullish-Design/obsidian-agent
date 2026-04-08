@@ -8,7 +8,7 @@ from tests.support.vault_fs import VaultWorkspace, build_run_id, create_vault_wo
 models.ALLOW_MODEL_REQUESTS = False
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def test_run_id() -> str:
     return build_run_id()
 

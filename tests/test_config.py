@@ -100,6 +100,36 @@ def test_invalid_model_string(tmp_path: Path) -> None:
         AgentConfig(vault_dir=tmp_path, llm_model="no-colon-here")
 
 
+@pytest.mark.parametrize("model", [":gpt-4o", "openai:", ":"])
+def test_invalid_model_string_with_empty_segment(tmp_path: Path, model: str) -> None:
+    with pytest.raises(ValidationError):
+        AgentConfig(vault_dir=tmp_path, llm_model=model)
+
+
+@pytest.mark.parametrize("url", ["ftp://localhost:8000", "localhost:8000", "http:///v1"])
+def test_invalid_base_url(tmp_path: Path, url: str) -> None:
+    with pytest.raises(ValidationError):
+        AgentConfig(vault_dir=tmp_path, llm_base_url=url)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("llm_max_tokens", 0),
+        ("llm_max_tokens", -1),
+        ("max_iterations", 0),
+        ("operation_timeout", 0),
+        ("jj_timeout", 0),
+        ("port", 0),
+        ("port", 70000),
+    ],
+)
+def test_numeric_bounds_validation(tmp_path: Path, field_name: str, value: int) -> None:
+    kwargs = {"vault_dir": tmp_path, field_name: value}
+    with pytest.raises(ValidationError):
+        AgentConfig(**kwargs)
+
+
 def test_extra_env_vars_ignored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_VAULT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENT_UNKNOWN_FIELD", "foo")

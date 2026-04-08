@@ -248,7 +248,7 @@ async def test_model_api_error_is_reported(agent: Agent) -> None:
 
 
 async def test_run_timeout_returns_error(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = AgentConfig(vault_dir=Path(vault.root), operation_timeout=0)
+    config = AgentConfig(vault_dir=Path(vault.root), operation_timeout=1)
     timeout_agent = Agent(config, vault)
 
     def commit_noop(message: str) -> None:
@@ -261,11 +261,20 @@ async def test_run_timeout_returns_error(vault: Vault, monkeypatch: pytest.Monke
         await asyncio.sleep(0.05)
         return ModelResponse(parts=[TextPart("done")])
 
+    async def wait_for_timeout(awaitable, timeout):  # type: ignore[no-untyped-def]
+        _ = timeout
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("obsidian_agent.agent.asyncio.wait_for", wait_for_timeout)
+
     with timeout_agent._pydantic_agent.override(model=FunctionModel(slow_model_fn)):
         result = await timeout_agent.run("slow task")
 
     assert result.ok is False
-    assert result.error == "Operation timed out after 0s"
+    assert result.error == "Operation timed out after 1s"
     assert timeout_agent._busy is False
 
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,13 +11,13 @@ class AgentConfig(BaseSettings):
     vault_dir: Path
     llm_model: str = "anthropic:claude-sonnet-4-20250514"
     llm_base_url: str | None = None
-    llm_max_tokens: int = 4096
-    max_iterations: int = 20
-    operation_timeout: int = 120
+    llm_max_tokens: int = Field(default=4096, gt=0)
+    max_iterations: int = Field(default=20, gt=0)
+    operation_timeout: int = Field(default=120, gt=0)
     jj_bin: str = "jj"
-    jj_timeout: int = 120
+    jj_timeout: int = Field(default=120, gt=0)
     host: str = "127.0.0.1"
-    port: int = 8081
+    port: int = Field(default=8081, ge=1, le=65535)
 
     @field_validator("vault_dir")
     @classmethod
@@ -36,6 +36,10 @@ class AgentConfig(BaseSettings):
         if ":" not in value:
             msg = "llm_model must be in 'provider:model-name' format"
             raise ValueError(msg)
+        provider, model_name = value.split(":", 1)
+        if not provider.strip() or not model_name.strip():
+            msg = "llm_model must include non-empty provider and model name"
+            raise ValueError(msg)
         return value
 
     @field_validator("llm_base_url")
@@ -45,6 +49,12 @@ class AgentConfig(BaseSettings):
             return value
 
         parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"}:
+            msg = "llm_base_url must use http or https"
+            raise ValueError(msg)
+        if not parsed.netloc:
+            msg = "llm_base_url must include a host"
+            raise ValueError(msg)
         normalized_path = parsed.path.rstrip("/")
         if not normalized_path:
             normalized_path = "/v1"

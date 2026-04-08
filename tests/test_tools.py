@@ -172,3 +172,42 @@ async def test_busy_error_reraises() -> None:
 
     with pytest.raises(BusyError):
         await read_file(make_ctx(deps), "note.md")
+
+
+async def test_read_block_not_found_returns_message(deps: VaultDeps) -> None:
+    result = await read_block(make_ctx(deps), "block.md", "^missing-block")
+
+    assert "not found" in result
+
+
+@pytest.mark.parametrize(
+    ("method_name", "tool_fn", "args"),
+    [
+        ("write_file", write_file, ("note.md", "x")),
+        ("delete_file", delete_file, ("note.md",)),
+        ("list_files", list_files, ("*.md",)),
+        ("search_files", search_files, ("query",)),
+        ("get_frontmatter", get_frontmatter, ("note.md",)),
+        ("update_frontmatter", update_frontmatter, ("note.md", {"k": "v"})),
+        ("read_heading", read_heading, ("note.md", "# H")),
+        ("write_heading", write_heading, ("note.md", "# H", "x")),
+        ("read_block", read_block, ("note.md", "^b")),
+        ("write_block", write_block, ("note.md", "^b", "x")),
+    ],
+)
+async def test_tools_return_error_string_on_generic_exception(method_name: str, tool_fn, args) -> None:
+    class ErrorVault:
+        def __getattr__(self, name: str):
+            if name != method_name:
+                raise AttributeError(name)
+
+            def raise_error(*_args, **_kwargs):
+                raise RuntimeError("boom")
+
+            return raise_error
+
+    deps = VaultDeps(vault=ErrorVault())  # type: ignore[arg-type]
+
+    result = await tool_fn(make_ctx(deps), *args)
+
+    assert result.startswith("Error:")

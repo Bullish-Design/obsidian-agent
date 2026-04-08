@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 from obsidian_ops import Vault
-from obsidian_ops.errors import BusyError
+from obsidian_ops.errors import BusyError, VaultError
 from pydantic_ai import RunContext
 
 
@@ -23,7 +23,7 @@ async def read_file(ctx: RunContext[VaultDeps], path: str) -> str:
         return ctx.deps.vault.read_file(path)
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -35,7 +35,7 @@ async def write_file(ctx: RunContext[VaultDeps], path: str, content: str) -> str
         return f"Successfully wrote {path}"
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -47,7 +47,7 @@ async def delete_file(ctx: RunContext[VaultDeps], path: str) -> str:
         return f"Deleted {path}"
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -60,7 +60,7 @@ async def list_files(ctx: RunContext[VaultDeps], pattern: str) -> str:
         return f"Found {len(files)} files:\n" + "\n".join(files)
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -76,7 +76,7 @@ async def search_files(ctx: RunContext[VaultDeps], query: str, glob: str = "*.md
         return "\n".join(lines)
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -89,7 +89,7 @@ async def get_frontmatter(ctx: RunContext[VaultDeps], path: str) -> str:
         return json.dumps(frontmatter, indent=2, default=str)
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -101,7 +101,7 @@ async def update_frontmatter(ctx: RunContext[VaultDeps], path: str, updates: dic
         return f"Updated frontmatter for {path}"
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -114,7 +114,7 @@ async def read_heading(ctx: RunContext[VaultDeps], path: str, heading: str) -> s
         return content
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -126,7 +126,7 @@ async def write_heading(ctx: RunContext[VaultDeps], path: str, heading: str, con
         return f"Updated heading '{heading}' in {path}"
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -139,7 +139,7 @@ async def read_block(ctx: RunContext[VaultDeps], path: str, block_id: str) -> st
         return content
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 
@@ -151,7 +151,7 @@ async def write_block(ctx: RunContext[VaultDeps], path: str, block_id: str, cont
         return f"Updated block '{block_id}' in {path}"
     except BusyError:
         raise
-    except Exception as exc:
+    except (VaultError, FileNotFoundError) as exc:
         return f"Error: {exc}"
 
 

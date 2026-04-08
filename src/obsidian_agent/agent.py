@@ -1,6 +1,7 @@
 import httpx
 
 from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
 from pydantic_ai.models.openai import OpenAIModel
@@ -149,13 +150,8 @@ class Agent:
                 summary="",
                 error=f"LLM call failed: {exc}",
             )
-        except Exception as exc:
-            return RunResult(
-                ok=False,
-                updated=False,
-                summary="",
-                error=f"Agent error: {exc}",
-            )
+        except VaultBusyError:
+            raise
 
         summary = result.output if isinstance(result.output, str) else str(result.output)
         changed_files = sorted(deps.changed_files)

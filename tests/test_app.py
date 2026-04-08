@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -142,6 +143,19 @@ def test_undo_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPat
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Another operation is already running"
+
+
+def test_apply_vault_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def vault_busy_run(instruction: str, current_file: str | None = None) -> RunResult:
+        _ = instruction, current_file
+        raise VaultBusyError("vault is busy elsewhere")
+
+    monkeypatch.setattr(client.app.state.agent, "run", vault_busy_run)
+
+    response = client.post("/api/apply", json={"instruction": "Run concurrently"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "vault is busy elsewhere"
 
 
 def test_default_app_lifespan_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

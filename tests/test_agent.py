@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -159,6 +160,28 @@ async def test_busy_error_on_concurrent_run(agent: Agent) -> None:
         with pytest.raises(BusyError):
             await agent.run("second task")
         await task
+
+
+async def test_vault_busy_error_propagates(agent: Agent, vault: Vault) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    def busy_write(path: str, content: str) -> None:
+        _ = path, content
+        raise VaultBusyError("vault is busy elsewhere")
+
+    vault.write_file = busy_write  # type: ignore[method-assign]
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        with pytest.raises(VaultBusyError, match="vault is busy elsewhere"):
+            await agent.run("Update note")
 
 
 async def test_undo_success(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:

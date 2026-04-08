@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from obsidian_ops import Vault
-from obsidian_ops.errors import BusyError
+from obsidian_ops.errors import BusyError, VaultError
 
 from obsidian_agent.tools import (
     VaultDeps,
@@ -195,14 +195,14 @@ async def test_read_block_not_found_returns_message(deps: VaultDeps) -> None:
         ("write_block", write_block, ("note.md", "^b", "x")),
     ],
 )
-async def test_tools_return_error_string_on_generic_exception(method_name: str, tool_fn, args) -> None:
+async def test_tools_return_error_string_on_vault_error(method_name: str, tool_fn, args) -> None:
     class ErrorVault:
         def __getattr__(self, name: str):
             if name != method_name:
                 raise AttributeError(name)
 
             def raise_error(*_args, **_kwargs):
-                raise RuntimeError("boom")
+                raise VaultError("boom")
 
             return raise_error
 
@@ -211,3 +211,15 @@ async def test_tools_return_error_string_on_generic_exception(method_name: str, 
     result = await tool_fn(make_ctx(deps), *args)
 
     assert result.startswith("Error:")
+
+
+async def test_tools_propagate_unexpected_runtime_errors() -> None:
+    class ErrorVault:
+        def read_file(self, path: str) -> str:
+            _ = path
+            raise RuntimeError("boom")
+
+    deps = VaultDeps(vault=ErrorVault())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await read_file(make_ctx(deps), "note.md")

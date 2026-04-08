@@ -4,6 +4,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
 
 from .agent import Agent, BusyError
 from .config import AgentConfig
@@ -56,7 +57,7 @@ def create_app(agent: Agent | None = None) -> FastAPI:
                 summary="",
                 error=f"Operation timed out after {active_agent.config.operation_timeout}s",
             )
-        except BusyError as exc:
+        except (BusyError, VaultBusyError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/undo", response_model=OperationResult)
@@ -65,7 +66,7 @@ def create_app(agent: Agent | None = None) -> FastAPI:
         try:
             result = await active_agent.undo()
             return to_operation_result(result)
-        except BusyError as exc:
+        except (BusyError, VaultBusyError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/health", response_model=HealthResponse)

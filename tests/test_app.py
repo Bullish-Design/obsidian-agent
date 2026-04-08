@@ -1,4 +1,3 @@
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -103,21 +102,24 @@ def test_post_apply_missing_instruction_returns_422(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_apply_timeout_returns_error(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def slow_run(instruction: str, current_file: str | None = None) -> RunResult:
+def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def timeout_run(instruction: str, current_file: str | None = None) -> RunResult:
         _ = instruction, current_file
-        await asyncio.sleep(0.05)
-        return RunResult(ok=True, updated=False, summary="done")
+        return RunResult(
+            ok=False,
+            updated=False,
+            summary="",
+            error="Operation timed out after 120s",
+        )
 
-    client.app.state.agent.config.operation_timeout = 0
-    monkeypatch.setattr(client.app.state.agent, "run", slow_run)
+    monkeypatch.setattr(client.app.state.agent, "run", timeout_run)
 
     response = client.post("/api/apply", json={"instruction": "Timeout me"})
 
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is False
-    assert "timed out" in data["error"]
+    assert data["error"] == "Operation timed out after 120s"
 
 
 def test_apply_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -45,18 +44,8 @@ def create_app(agent: Agent | None = None) -> FastAPI:
             return OperationResult(ok=False, updated=False, summary="", error="instruction is required")
 
         try:
-            result = await asyncio.wait_for(
-                active_agent.run(request.instruction, request.current_file),
-                timeout=active_agent.config.operation_timeout,
-            )
+            result = await active_agent.run(request.instruction, request.current_file)
             return to_operation_result(result)
-        except asyncio.TimeoutError:
-            return OperationResult(
-                ok=False,
-                updated=False,
-                summary="",
-                error=f"Operation timed out after {active_agent.config.operation_timeout}s",
-            )
         except (BusyError, VaultBusyError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

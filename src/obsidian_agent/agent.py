@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 
 from obsidian_ops import Vault
@@ -122,7 +123,17 @@ class Agent:
     async def run(self, instruction: str, current_file: str | None = None) -> RunResult:
         self._acquire_busy()
         try:
-            return await self._run_impl(instruction, current_file)
+            return await asyncio.wait_for(
+                self._run_impl(instruction, current_file),
+                timeout=self.config.operation_timeout,
+            )
+        except asyncio.TimeoutError:
+            return RunResult(
+                ok=False,
+                updated=False,
+                summary="",
+                error=f"Operation timed out after {self.config.operation_timeout}s",
+            )
         finally:
             self._release_busy()
 

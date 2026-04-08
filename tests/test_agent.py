@@ -247,6 +247,28 @@ async def test_model_api_error_is_reported(agent: Agent) -> None:
     assert result.error.startswith("LLM call failed:")
 
 
+async def test_run_timeout_returns_error(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AgentConfig(vault_dir=Path(vault.root), operation_timeout=0)
+    timeout_agent = Agent(config, vault)
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+
+    async def slow_model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        await asyncio.sleep(0.05)
+        return ModelResponse(parts=[TextPart("done")])
+
+    with timeout_agent._pydantic_agent.override(model=FunctionModel(slow_model_fn)):
+        result = await timeout_agent.run("slow task")
+
+    assert result.ok is False
+    assert result.error == "Operation timed out after 0s"
+    assert timeout_agent._busy is False
+
+
 def test_normalize_commit_message() -> None:
     assert Agent._normalize_commit_message("   a   b   c   ") == "a b c"
     assert Agent._normalize_commit_message("   ") == "obsidian-agent update"

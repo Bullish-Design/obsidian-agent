@@ -185,10 +185,13 @@ async def test_vault_busy_error_propagates(agent: Agent, vault: Vault) -> None:
 
 
 async def test_undo_success(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
-    def undo_noop() -> None:
-        return None
+    class UndoResult:
+        warning = None
 
-    monkeypatch.setattr(vault, "undo", undo_noop)
+    def undo_last_change() -> UndoResult:
+        return UndoResult()
+
+    monkeypatch.setattr(vault, "undo_last_change", undo_last_change)
 
     result = await agent.undo()
 
@@ -196,61 +199,30 @@ async def test_undo_success(agent: Agent, vault: Vault, monkeypatch: pytest.Monk
     assert result.summary == "Last change undone."
 
 
-async def test_undo_invokes_jj_restore_with_expected_args(
+async def test_undo_surfaces_warning_from_ops(
     agent: Agent,
     vault: Vault,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, object]] = []
+    class UndoResult:
+        warning = "restore after undo failed: restore failed"
 
-    def undo_noop() -> None:
-        return None
+    def undo_last_change() -> UndoResult:
+        return UndoResult()
 
-    def run_spy(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append({"cmd": cmd, "kwargs": kwargs})
-        return None
-
-    monkeypatch.setattr(vault, "undo", undo_noop)
-    monkeypatch.setattr("obsidian_agent.agent.subprocess.run", run_spy)
+    monkeypatch.setattr(vault, "undo_last_change", undo_last_change)
 
     result = await agent.undo()
 
     assert result.ok is True
-    assert result.warning is None
-    assert len(calls) == 1
-    first = calls[0]
-    assert first["cmd"] == [agent.config.jj_bin, "restore", "--from", "@-"]
-    assert first["kwargs"]["cwd"] == vault.root
-    assert first["kwargs"]["timeout"] == agent.config.jj_timeout
-
-
-async def test_undo_sets_warning_when_restore_fails(
-    agent: Agent,
-    vault: Vault,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def undo_noop() -> None:
-        return None
-
-    def run_fail(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        _ = cmd, kwargs
-        raise RuntimeError("restore failed")
-
-    monkeypatch.setattr(vault, "undo", undo_noop)
-    monkeypatch.setattr("obsidian_agent.agent.subprocess.run", run_fail)
-
-    result = await agent.undo()
-
-    assert result.ok is True
-    assert result.warning is not None
-    assert "restore after undo failed" in result.warning
+    assert result.warning == "restore after undo failed: restore failed"
 
 
 async def test_undo_failure(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
     def undo_fail() -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(vault, "undo", undo_fail)
+    monkeypatch.setattr(vault, "undo_last_change", undo_fail)
 
     result = await agent.undo()
 

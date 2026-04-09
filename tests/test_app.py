@@ -48,11 +48,14 @@ def client(app_workspace: VaultWorkspace, monkeypatch: pytest.MonkeyPatch) -> Te
     def commit_noop(message: str) -> None:
         _ = message
 
-    def undo_noop() -> None:
-        return None
+    class UndoResult:
+        warning = None
+
+    def undo_noop() -> UndoResult:
+        return UndoResult()
 
     monkeypatch.setattr(vault, "commit", commit_noop)
-    monkeypatch.setattr(vault, "undo", undo_noop)
+    monkeypatch.setattr(vault, "undo_last_change", undo_noop)
 
     app = create_app(agent)
     with agent._pydantic_agent.override(model=text_only_model("No changes needed")):

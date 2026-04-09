@@ -1444,7 +1444,7 @@ requires-dist = [
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.0" },
-    { name = "obsidian-ops", git = "https://github.com/Bullish-Design/obsidian-ops.git?rev=9a798c2ddfccdd63b3ec3673c0269000d1ea0d6c" },
+    { name = "obsidian-ops", editable = "../obsidian-ops" },
     { name = "pydantic", specifier = ">=2.12.0" },
     { name = "pydantic-ai", specifier = ">=1.7,<2.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
@@ -1457,11 +1457,25 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "obsidian-ops"
-version = "0.3.0"
-source = { git = "https://github.com/Bullish-Design/obsidian-ops.git?rev=9a798c2ddfccdd63b3ec3673c0269000d1ea0d6c#9a798c2ddfccdd63b3ec3673c0269000d1ea0d6c" }
+version = "0.4.0"
+source = { editable = "../obsidian-ops" }
 dependencies = [
     { name = "pyyaml" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115.0" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115.0" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.34.0" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.34.0" },
+]
+provides-extras = ["server", "dev"]
 
 [[package]]
 name = "openai"

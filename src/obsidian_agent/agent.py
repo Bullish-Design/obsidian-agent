@@ -1,6 +1,5 @@
 import asyncio
 import httpx
-import subprocess
 
 from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
@@ -198,19 +197,8 @@ class Agent:
     async def undo(self) -> RunResult:
         self._acquire_busy()
         try:
-            self.vault.undo()
-            warning = None
-            try:
-                subprocess.run(
-                    [self.config.jj_bin, "restore", "--from", "@-"],
-                    cwd=self.vault.root,
-                    check=True,
-                    timeout=self.config.jj_timeout,
-                    capture_output=True,
-                    text=True,
-                )
-            except Exception as exc:
-                warning = f"restore after undo failed: {exc}"
+            undo_result = self.vault.undo_last_change()
+            warning = getattr(undo_result, "warning", None)
             return RunResult(ok=True, updated=True, summary="Last change undone.", warning=warning)
         except Exception as exc:
             return RunResult(ok=False, updated=False, summary="", error=f"undo failed: {exc}")

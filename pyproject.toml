@@ -22,7 +22,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-obsidian-ops = { git = "https://github.com/Bullish-Design/obsidian-ops.git", tag = "v0.4.0" }
+obsidian-ops = { path = "../obsidian-ops", editable = true }
 
 [project.scripts]
 obsidian-agent = "obsidian_agent.__main__:main"

@@ -19,3 +19,14 @@
   - direct raw `jj` subprocess path exists in `src/obsidian_agent/agent.py` undo flow.
 - No other active direct raw filesystem or raw `jj` subprocess paths were identified in the service layer.
 
+## Step 2: Remove Direct `jj restore` From Agent Layer
+
+- `Agent.undo()` now calls `vault.undo_last_change()` and maps lower-layer warning output into `RunResult.warning`.
+- Removed direct agent-layer `subprocess.run([jj, restore, --from, @-])` usage.
+- Updated tests to assert new boundary:
+  - unit tests now verify `undo_last_change()` success/warning/failure flows.
+  - integration undo flow still verifies end-to-end restore behavior in a real JJ repo.
+- Validation:
+  - `devenv shell -- pytest -q tests/test_agent.py` -> `22 passed`
+  - `devenv shell -- pytest -q tests/test_integration.py` -> `5 passed`
+  - `devenv shell -- pytest -q` -> `108 passed`

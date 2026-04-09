@@ -3,7 +3,7 @@ name = "obsidian-agent"
 version = "0.1.1"
 requires-python = ">=3.13"
 dependencies = [
-    "obsidian-ops @ git+https://github.com/Bullish-Design/obsidian-ops.git@9a798c2ddfccdd63b3ec3673c0269000d1ea0d6c",
+    "obsidian-ops,
     "pydantic-ai>=1.7,<2.0",
     "pydantic>=2.12.0",
     "pydantic-settings>=2.0.0",
@@ -20,6 +20,9 @@ dev = [
     "anyio>=4.0",
     "coverage>=7.0",
 ]
+
+[tool.uv.sources]
+obsidian-ops = { git = "https://github.com/Bullish-Design/obsidian-ops.git", tag = "v0.4.0" }
 
 [project.scripts]
 obsidian-agent = "obsidian_agent.__main__:main"

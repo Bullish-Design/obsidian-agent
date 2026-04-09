@@ -202,11 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--base-url",
         default="http://remora-server:8000/v1",
-        help="OpenAI-compatible vLLM base URL.",
+        help="OpenAI-compatible llama.cpp base URL.",
     )
     parser.add_argument(
         "--model",
-        default="unsloth/gemma-4-E4B",
+        default="qwen3.5-9b-gguf-ud-q6-xl",
         help="Model name to use from the OpenAI-compatible endpoint.",
     )
     parser.add_argument(
@@ -230,9 +230,10 @@ def run_demo(args: argparse.Namespace) -> int:
         print(f"Vault directory not found: {vault_dir}")
         return 1
 
+    base_url = args.base_url.rstrip("/")
     print("Checking model endpoint...")
     try:
-        _preflight_llm_base_url(args.base_url.rstrip("/"))
+        _preflight_llm_base_url(base_url)
     except Exception as exc:
         print(f"Failed to reach model endpoint: {exc}")
         return 1
@@ -240,7 +241,7 @@ def run_demo(args: argparse.Namespace) -> int:
     config = AgentConfig(
         vault_dir=vault_dir,
         llm_model=f"openai:{args.model}",
-        llm_base_url=args.base_url,
+        llm_base_url=base_url,
         llm_max_tokens=args.max_tokens,
         operation_timeout=args.operation_timeout,
     )

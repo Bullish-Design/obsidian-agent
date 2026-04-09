@@ -20,7 +20,7 @@ devenv shell -- obsidian-agent-demo --vault-dir demo-vault
 Defaults used by the demo script:
 
 - Base URL: `http://remora-server:8000/v1`
-- Model: `unsloth/gemma-4-E4B`
+- Model: `qwen3.5-9b-gguf-ud-q6-xl`
 
 Controls while the script is running:
 

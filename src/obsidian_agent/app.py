@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
@@ -8,6 +9,8 @@ from obsidian_ops.errors import BusyError as VaultBusyError
 from .agent import Agent, BusyError
 from .config import AgentConfig
 from .models import ApplyRequest, HealthResponse, OperationResult, RunResult
+
+logger = logging.getLogger(__name__)
 
 
 def to_operation_result(result: RunResult) -> OperationResult:
@@ -47,6 +50,10 @@ def create_app(agent: Agent | None = None) -> FastAPI:
             result = await active_agent.run(request.instruction, request.current_file)
             return to_operation_result(result)
         except (BusyError, VaultBusyError) as exc:
+            logger.warning(
+                "api.apply_busy_rejected",
+                extra={"error": str(exc), "has_current_file": bool(request.current_file)},
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/undo", response_model=OperationResult)
@@ -56,6 +63,7 @@ def create_app(agent: Agent | None = None) -> FastAPI:
             result = await active_agent.undo()
             return to_operation_result(result)
         except (BusyError, VaultBusyError) as exc:
+            logger.warning("api.undo_busy_rejected", extra={"error": str(exc)})
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/health", response_model=HealthResponse)

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import httpx
 
 from obsidian_ops import Vault
@@ -13,6 +14,8 @@ from .config import AgentConfig
 from .models import RunResult
 from .prompt import build_system_prompt
 from .tools import VaultDeps, register_tools
+
+logger = logging.getLogger(__name__)
 
 
 class BusyError(Exception):
@@ -54,11 +57,28 @@ class Agent:
 
         provider, _, configured_model = self.config.llm_model.partition(":")
         if provider != "openai":
+            logger.info(
+                "llm.base_url_ignored",
+                extra={
+                    "provider": provider,
+                    "model": self.config.llm_model,
+                    "base_url": self.config.llm_base_url,
+                },
+            )
             return self.config.llm_model
 
         selected_model = configured_model
         if self._is_generic_model_name(configured_model):
             selected_model = self._resolve_model_name_from_base_url(self.config.llm_base_url)
+            logger.info(
+                "llm.model_auto_resolved",
+                extra={"base_url": self.config.llm_base_url, "selected_model": selected_model},
+            )
+        else:
+            logger.info(
+                "llm.model_configured",
+                extra={"base_url": self.config.llm_base_url, "selected_model": selected_model},
+            )
 
         return OpenAIChatModel(
             selected_model,
@@ -94,6 +114,7 @@ class Agent:
         return model_ids
 
     def _resolve_model_name_from_base_url(self, base_url: str) -> str:
+        logger.info("llm.model_discovery_start", extra={"base_url": base_url})
         response = httpx.get(f"{base_url}/models", timeout=10)
         response.raise_for_status()
 
@@ -103,10 +124,12 @@ class Agent:
             raise ValueError(msg)
 
         if len(model_ids) == 1:
+            logger.info("llm.model_discovery_single", extra={"base_url": base_url, "model": model_ids[0]})
             return model_ids[0]
 
         for model_id in model_ids:
             if "instruct" in model_id.lower():
+                logger.info("llm.model_discovery_instruct_match", extra={"base_url": base_url, "model": model_id})
                 return model_id
 
         available = ", ".join(model_ids)
@@ -125,6 +148,7 @@ class Agent:
 
     def _acquire_busy(self) -> None:
         if self._busy:
+            logger.warning("agent.busy_rejected")
             raise BusyError("Another operation is already running")
         self._busy = True
 
@@ -133,12 +157,32 @@ class Agent:
 
     async def run(self, instruction: str, current_file: str | None = None) -> RunResult:
         self._acquire_busy()
+        logger.info(
+            "agent.run_start",
+            extra={
+                "instruction_len": len(instruction),
+                "has_current_file": bool(current_file),
+                "timeout_s": self.config.operation_timeout,
+            },
+        )
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._run_impl(instruction, current_file),
                 timeout=self.config.operation_timeout,
             )
+            logger.info(
+                "agent.run_complete",
+                extra={
+                    "ok": result.ok,
+                    "updated": result.updated,
+                    "changed_file_count": len(result.changed_files),
+                    "has_warning": bool(result.warning),
+                    "has_error": bool(result.error),
+                },
+            )
+            return result
         except asyncio.TimeoutError:
+            logger.warning("agent.run_timeout", extra={"timeout_s": self.config.operation_timeout})
             return RunResult(
                 ok=False,
                 updated=False,
@@ -183,8 +227,16 @@ class Agent:
             commit_message = self._normalize_commit_message(instruction)
             try:
                 self.vault.commit(commit_message)
+                logger.info(
+                    "agent.commit_success",
+                    extra={"changed_file_count": len(changed_files), "message_len": len(commit_message)},
+                )
             except Exception as exc:
                 warning = f"Commit failed: {exc}"
+                logger.exception(
+                    "agent.commit_failed",
+                    extra={"changed_file_count": len(changed_files), "message_len": len(commit_message)},
+                )
 
         return RunResult(
             ok=True,
@@ -196,11 +248,14 @@ class Agent:
 
     async def undo(self) -> RunResult:
         self._acquire_busy()
+        logger.info("agent.undo_start")
         try:
             undo_result = self.vault.undo_last_change()
             warning = getattr(undo_result, "warning", None)
+            logger.info("agent.undo_complete", extra={"has_warning": bool(warning)})
             return RunResult(ok=True, updated=True, summary="Last change undone.", warning=warning)
         except Exception as exc:
+            logger.exception("agent.undo_failed")
             return RunResult(ok=False, updated=False, summary="", error=f"undo failed: {exc}")
         finally:
             self._release_busy()

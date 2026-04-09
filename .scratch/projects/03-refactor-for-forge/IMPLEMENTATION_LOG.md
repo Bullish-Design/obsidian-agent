@@ -70,3 +70,17 @@
   - `devenv shell -- pytest -q tests/test_tools.py` -> `35 passed`
   - `devenv shell -- pytest -q tests/test_agent.py` -> `22 passed`
   - `devenv shell -- pytest -q` -> `122 passed`
+
+## Step 7: Operational Logging
+
+- Added structured logs in `agent.py` for:
+  - run start/completion
+  - timeout
+  - busy rejection
+  - commit success/failure
+  - undo success/failure
+  - model discovery/selection behavior for OpenAI-compatible base URLs
+- Added API-layer busy rejection logs in `app.py` for `/api/apply` and `/api/undo`.
+- Kept API response shapes unchanged and avoided secret/prompt payload logging.
+- Validation:
+  - `devenv shell -- pytest -q` -> `122 passed`

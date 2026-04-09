@@ -54,13 +54,17 @@ def client(app_workspace: VaultWorkspace, monkeypatch: pytest.MonkeyPatch) -> Te
     def undo_noop() -> UndoResult:
         return UndoResult()
 
+    async def run_noop(instruction: str, current_file: str | None = None) -> RunResult:
+        _ = instruction, current_file
+        return RunResult(ok=True, updated=False, summary="No changes needed")
+
     monkeypatch.setattr(vault, "commit", commit_noop)
     monkeypatch.setattr(vault, "undo_last_change", undo_noop)
+    monkeypatch.setattr(agent, "run", run_noop)
 
     app = create_app(agent)
-    with agent._pydantic_agent.override(model=text_only_model("No changes needed")):
-        with TestClient(app, raise_server_exceptions=False) as test_client:
-            yield test_client
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        yield test_client
 
 
 def test_post_apply_valid_request(client: TestClient) -> None:
@@ -84,6 +88,18 @@ def test_post_apply_with_current_file(client: TestClient) -> None:
     response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
 
     assert response.status_code == 200
+
+
+def test_post_apply_with_invalid_current_file_returns_422(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "../note.md"})
+
+    assert response.status_code == 422
+
+
+def test_post_apply_with_current_url_path_field_returns_422(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_url_path": "/vault/note"})
+
+    assert response.status_code == 422
 
 
 def test_post_undo(client: TestClient) -> None:

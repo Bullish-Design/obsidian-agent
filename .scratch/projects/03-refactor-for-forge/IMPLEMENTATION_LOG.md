@@ -47,3 +47,13 @@
   - `obsidian-agent` keeps `requires-python = ">=3.13"`
   - `obsidian-ops` remains `>=3.12`
 - `devenv.nix` kept at Python `3.13` to match service runtime and existing validated test environment.
+
+## Step 5: Harden `current_file` Contract
+
+- Tightened `ApplyRequest` validation:
+  - extra fields forbidden
+  - `current_file` optional, but when provided must be a non-empty vault-relative path
+  - rejects URLs, absolute paths, parent traversal (`..`), and backslash separators
+- Added model and app tests for valid/invalid `current_file` and explicit rejection of `current_url_path`.
+- Validation:
+  - `devenv shell -- pytest -q tests/test_prompt.py tests/test_app.py tests/test_models.py` -> `32 passed`

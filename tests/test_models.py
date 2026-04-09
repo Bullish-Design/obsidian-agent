@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from obsidian_agent.models import ApplyRequest, OperationResult, RunResult
 
 
@@ -50,3 +53,26 @@ def test_apply_request_missing_instruction_defaults_to_none() -> None:
 
     assert request.instruction is None
     assert request.current_file is None
+
+
+def test_apply_request_trims_current_file() -> None:
+    request = ApplyRequest(instruction="do stuff", current_file="  Projects/Alpha.md  ")
+
+    assert request.current_file == "Projects/Alpha.md"
+
+
+@pytest.mark.parametrize(
+    "current_file",
+    [
+        "",
+        "   ",
+        "/Projects/Alpha.md",
+        "../Projects/Alpha.md",
+        "Projects/../Alpha.md",
+        "https://example.com/Projects/Alpha.md",
+        "Projects\\Alpha.md",
+    ],
+)
+def test_apply_request_rejects_invalid_current_file(current_file: str) -> None:
+    with pytest.raises(ValidationError):
+        ApplyRequest(instruction="do stuff", current_file=current_file)

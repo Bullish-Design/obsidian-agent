@@ -14,7 +14,15 @@ class VaultDeps:
     current_file: str | None = None
 
 
-WRITE_TOOLS = {"write_file", "delete_file", "update_frontmatter", "write_heading", "write_block"}
+WRITE_TOOLS = {
+    "write_file",
+    "delete_file",
+    "set_frontmatter",
+    "update_frontmatter",
+    "delete_frontmatter_field",
+    "write_heading",
+    "write_block",
+}
 
 
 async def read_file(ctx: RunContext[VaultDeps], path: str) -> str:
@@ -105,6 +113,30 @@ async def update_frontmatter(ctx: RunContext[VaultDeps], path: str, updates: dic
         return f"Error: {exc}"
 
 
+async def set_frontmatter(ctx: RunContext[VaultDeps], path: str, data: dict[str, Any]) -> str:
+    """Replace a file's entire YAML frontmatter with the provided object."""
+    try:
+        ctx.deps.vault.set_frontmatter(path, data)
+        ctx.deps.changed_files.add(path)
+        return f"Set frontmatter for {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def delete_frontmatter_field(ctx: RunContext[VaultDeps], path: str, field: str) -> str:
+    """Delete a specific YAML frontmatter field from a file."""
+    try:
+        ctx.deps.vault.delete_frontmatter_field(path, field)
+        ctx.deps.changed_files.add(path)
+        return f"Deleted frontmatter field '{field}' from {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
 async def read_heading(ctx: RunContext[VaultDeps], path: str, heading: str) -> str:
     """Read content under a heading. Heading includes '#' prefix, e.g. '## Summary'."""
     try:
@@ -163,7 +195,9 @@ def register_tools(agent: Any) -> None:
     agent.tool(list_files)
     agent.tool(search_files)
     agent.tool(get_frontmatter)
+    agent.tool(set_frontmatter)
     agent.tool(update_frontmatter)
+    agent.tool(delete_frontmatter_field)
     agent.tool(read_heading)
     agent.tool(write_heading)
     agent.tool(read_block)

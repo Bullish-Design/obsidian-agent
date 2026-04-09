@@ -57,3 +57,16 @@
 - Added model and app tests for valid/invalid `current_file` and explicit rejection of `current_url_path`.
 - Validation:
   - `devenv shell -- pytest -q tests/test_prompt.py tests/test_app.py tests/test_models.py` -> `32 passed`
+
+## Step 6: Tool Surface Alignment
+
+- Added stable tool wrappers backed by `obsidian-ops` APIs:
+  - `set_frontmatter(path, data)`
+  - `delete_frontmatter_field(path, field)`
+- Registered both tools in the agent toolset.
+- Ensured both tools mark files in `changed_files`.
+- Preserved recoverable tool failure format (`Error: ...`).
+- Validation:
+  - `devenv shell -- pytest -q tests/test_tools.py` -> `35 passed`
+  - `devenv shell -- pytest -q tests/test_agent.py` -> `22 passed`
+  - `devenv shell -- pytest -q` -> `122 passed`

@@ -9,12 +9,14 @@ from obsidian_ops.errors import BusyError, VaultError
 from obsidian_agent.tools import (
     VaultDeps,
     delete_file,
+    delete_frontmatter_field,
     get_frontmatter,
     list_files,
     read_block,
     read_file,
     read_heading,
     search_files,
+    set_frontmatter,
     update_frontmatter,
     write_block,
     write_file,
@@ -112,6 +114,27 @@ async def test_update_frontmatter_updates_and_tracks(vault: Vault, deps: VaultDe
     frontmatter = vault.get_frontmatter("note.md")
     assert frontmatter is not None
     assert frontmatter["status"] == "done"
+    assert "note.md" in deps.changed_files
+
+
+async def test_set_frontmatter_replaces_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await set_frontmatter(make_ctx(deps), "note.md", {"title": "Replaced", "status": "new"})
+
+    assert result == "Set frontmatter for note.md"
+    frontmatter = vault.get_frontmatter("note.md")
+    assert frontmatter is not None
+    assert frontmatter["title"] == "Replaced"
+    assert frontmatter["status"] == "new"
+    assert "note.md" in deps.changed_files
+
+
+async def test_delete_frontmatter_field_updates_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await delete_frontmatter_field(make_ctx(deps), "note.md", "title")
+
+    assert result == "Deleted frontmatter field 'title' from note.md"
+    frontmatter = vault.get_frontmatter("note.md")
+    assert frontmatter is not None
+    assert "title" not in frontmatter
     assert "note.md" in deps.changed_files
 
 
@@ -217,7 +240,9 @@ async def test_changed_files_deduplicates_multiple_writes(deps: VaultDeps) -> No
         ("list_files", list_files, ("*.md",)),
         ("search_files", search_files, ("query",)),
         ("get_frontmatter", get_frontmatter, ("note.md",)),
+        ("set_frontmatter", set_frontmatter, ("note.md", {"k": "v"})),
         ("update_frontmatter", update_frontmatter, ("note.md", {"k": "v"})),
+        ("delete_frontmatter_field", delete_frontmatter_field, ("note.md", "k")),
         ("read_heading", read_heading, ("note.md", "# H")),
         ("write_heading", write_heading, ("note.md", "# H", "x")),
         ("read_block", read_block, ("note.md", "^b")),

@@ -93,3 +93,13 @@
   - `before/work/after` directories present per test workspace
   - `manifest.json` includes fixture/test identifiers and `changed_files`
 - Confirmed manifest generation remains active under current fixture workflow.
+
+## Step 9: Final Documentation Pass
+
+- Updated `README.md` to explicitly document:
+  - service ownership and non-ownership boundary
+  - git-pinned dependency strategy and local setup
+  - runtime environment variables
+  - `/api/apply`, `/api/undo`, `/api/health` contract details
+  - strict `current_file` contract and rejection semantics
+  - explicit statement that URL-to-file resolution is caller-owned

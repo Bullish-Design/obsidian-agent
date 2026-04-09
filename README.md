@@ -23,10 +23,19 @@ All vault and VCS mechanics must remain in `obsidian-ops` (`Vault` and its API s
 - `POST /api/apply`
   - input: `instruction` (required semantic field), `current_file` (optional vault-relative path)
   - output: `OperationResult` with `ok`, `updated`, `summary`, `changed_files`, `error`, `warning`
+  - invalid `current_file` payloads fail deterministically with request validation errors (HTTP 422)
 - `POST /api/undo`
   - output: `OperationResult`
 - `GET /api/health`
   - output: `{ "ok": true, "status": "healthy" }`
+
+## `current_file` Contract
+
+- `current_file` is optional.
+- If provided, it must be a non-empty vault-relative path using `/` separators.
+- URL values and traversal forms (for example `..`) are rejected.
+- `current_url_path` is not accepted by this service.
+- URL-to-file resolution is the caller's responsibility before calling `obsidian-agent`.
 
 ## Runtime Environment
 

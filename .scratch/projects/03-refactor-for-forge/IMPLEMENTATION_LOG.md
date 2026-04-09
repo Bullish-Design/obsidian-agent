@@ -33,10 +33,17 @@
 
 ## Step 3: Dependency Strategy Update
 
-- Removed git-pinned `obsidian-ops` dependency source in favor of explicit local workspace override for active development:
-  - `[tool.uv.sources] obsidian-ops = { path = "../obsidian-ops", editable = true }`
+- Dependency decision updated: keep an explicit git-pinned `obsidian-ops` source for reproducibility:
+  - `[tool.uv.sources] obsidian-ops = { git = "https://github.com/Bullish-Design/obsidian-ops.git", tag = "v0.4.0" }`
 - Removed `allow-direct-references` metadata (no longer needed).
-- Documented local setup and validation workflow in `README.md`.
+- Documented the pinned strategy and local setup workflow in `README.md`.
 - Validation:
   - clean setup flow: `devenv shell -- uv sync --extra dev`
   - full suite: `devenv shell -- pytest -q` -> `108 passed`
+
+## Step 4: Python Version Requirement Alignment
+
+- Version mismatch is intentional and documented:
+  - `obsidian-agent` keeps `requires-python = ">=3.13"`
+  - `obsidian-ops` remains `>=3.12`
+- `devenv.nix` kept at Python `3.13` to match service runtime and existing validated test environment.

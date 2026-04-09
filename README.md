@@ -2,6 +2,8 @@
 
 `obsidian-agent` is a backend service for LLM-driven vault edits over a stable HTTP API.
 
+Python runtime floor is intentionally `>=3.13` for this service; `obsidian-ops` remains compatible with `>=3.12`.
+
 ## Ownership Boundary
 
 `obsidian-agent` owns:
@@ -42,13 +44,7 @@ All vault and VCS mechanics must remain in `obsidian-ops` (`Vault` and its API s
 ## Local Development
 
 Dependency strategy:
-- normal package dependency: `obsidian-ops` (no git-pinned direct reference in this repo)
-- active multi-repo development: `uv` workspace source override in `pyproject.toml`:
-  - `[tool.uv.sources] obsidian-ops = { path = "../obsidian-ops", editable = true }`
-
-Expected local layout:
-- `/home/andrew/Documents/Projects/obsidian-agent`
-- `/home/andrew/Documents/Projects/obsidian-ops`
+- this repo pins `obsidian-ops` using a git source in `pyproject.toml` for reproducible installs
 
 Setup flow:
 

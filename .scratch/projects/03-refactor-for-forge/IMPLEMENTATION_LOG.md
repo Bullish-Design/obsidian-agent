@@ -103,3 +103,10 @@
   - `/api/apply`, `/api/undo`, `/api/health` contract details
   - strict `current_file` contract and rejection semantics
   - explicit statement that URL-to-file resolution is caller-owned
+
+## Step 10: Final Validation Matrix
+
+- `devenv shell -- pytest -q tests/test_config.py tests/test_models.py tests/test_prompt.py tests/test_app.py` -> `56 passed`
+- `devenv shell -- pytest -q tests/test_agent.py tests/test_tools.py` -> `57 passed`
+- `devenv shell -- pytest -q tests/test_integration.py` -> `5 passed`
+- `devenv shell -- pytest -q` -> `122 passed`

@@ -84,3 +84,12 @@
 - Kept API response shapes unchanged and avoided secret/prompt payload logging.
 - Validation:
   - `devenv shell -- pytest -q` -> `122 passed`
+
+## Step 8: Test Artifact Workflow
+
+- Ran artifact-focused suite:
+  - `devenv shell -- pytest -q tests/test_tools.py tests/test_app.py tests/test_integration.py` -> `55 passed`
+- Verified latest artifact run directory and manifest output:
+  - `before/work/after` directories present per test workspace
+  - `manifest.json` includes fixture/test identifiers and `changed_files`
+- Confirmed manifest generation remains active under current fixture workflow.

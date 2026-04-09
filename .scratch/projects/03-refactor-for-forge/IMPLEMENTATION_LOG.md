@@ -30,3 +30,13 @@
   - `devenv shell -- pytest -q tests/test_agent.py` -> `22 passed`
   - `devenv shell -- pytest -q tests/test_integration.py` -> `5 passed`
   - `devenv shell -- pytest -q` -> `108 passed`
+
+## Step 3: Dependency Strategy Update
+
+- Removed git-pinned `obsidian-ops` dependency source in favor of explicit local workspace override for active development:
+  - `[tool.uv.sources] obsidian-ops = { path = "../obsidian-ops", editable = true }`
+- Removed `allow-direct-references` metadata (no longer needed).
+- Documented local setup and validation workflow in `README.md`.
+- Validation:
+  - clean setup flow: `devenv shell -- uv sync --extra dev`
+  - full suite: `devenv shell -- pytest -q` -> `108 passed`

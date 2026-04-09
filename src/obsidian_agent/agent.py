@@ -21,6 +21,12 @@ class BusyError(Exception):
 
 
 class Agent:
+    """Agent orchestration layer.
+
+    Boundary rule: this layer may orchestrate `obsidian_ops.Vault`, but raw filesystem
+    operations and raw `jj` subprocess lifecycle logic must remain in `obsidian-ops`.
+    """
+
     def __init__(self, config: AgentConfig, vault: Vault | None = None):
         self.config = config
         self.vault = vault or Vault(

@@ -85,7 +85,10 @@ def test_post_apply_empty_instruction(client: TestClient) -> None:
 
 
 def test_post_apply_with_current_file(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
+    response = client.post(
+        "/api/apply",
+        json={"instruction": "Summarize this", "current_file": "note.md", "interface_id": "command"},
+    )
 
     assert response.status_code == 200
 
@@ -100,6 +103,19 @@ def test_post_apply_with_current_url_path_field_returns_422(client: TestClient) 
     response = client.post("/api/apply", json={"instruction": "Summarize this", "current_url_path": "/vault/note"})
 
     assert response.status_code == 422
+
+
+def test_post_apply_with_empty_interface_id_returns_422(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "interface_id": " "})
+
+    assert response.status_code == 422
+
+
+def test_post_apply_unknown_interface_id_returns_400(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "interface_id": "chat"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unsupported interface_id: chat"
 
 
 def test_post_undo(client: TestClient) -> None:
@@ -140,6 +156,21 @@ def test_post_apply_missing_instruction_returns_200_error(client: TestClient) ->
     data = response.json()
     assert data["ok"] is False
     assert data["error"] == "instruction is required"
+
+
+def test_post_apply_defaults_interface_to_command(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[str, str | None]] = []
+
+    async def run_spy(instruction: str, current_file: str | None = None) -> RunResult:
+        captured.append((instruction, current_file))
+        return RunResult(ok=True, updated=False, summary="No changes needed")
+
+    monkeypatch.setattr(client.app.state.agent, "run", run_spy)
+
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
+
+    assert response.status_code == 200
+    assert captured == [("Summarize this", "note.md")]
 
 
 def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

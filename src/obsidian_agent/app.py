@@ -11,6 +11,7 @@ from .config import AgentConfig
 from .models import ApplyRequest, HealthResponse, OperationResult, RunResult
 
 logger = logging.getLogger(__name__)
+DEFAULT_INTERFACE_ID = "command"
 
 
 def to_operation_result(result: RunResult) -> OperationResult:
@@ -39,20 +40,32 @@ def create_app(agent: Agent | None = None) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
 
-    @app.post("/api/apply", response_model=OperationResult)
-    async def apply_instruction(request: ApplyRequest) -> OperationResult:
+    async def command_interface_handler(request: ApplyRequest) -> OperationResult:
         active_agent: Agent = app.state.agent
-
         if request.instruction is None or not request.instruction.strip():
             return OperationResult(ok=False, updated=False, summary="", error="instruction is required")
+        result = await active_agent.run(request.instruction, request.current_file)
+        return to_operation_result(result)
+
+    interface_handlers = {DEFAULT_INTERFACE_ID: command_interface_handler}
+
+    @app.post("/api/apply", response_model=OperationResult)
+    async def apply_instruction(request: ApplyRequest) -> OperationResult:
+        interface_id = request.interface_id or DEFAULT_INTERFACE_ID
+        handler = interface_handlers.get(interface_id)
+        if handler is None:
+            raise HTTPException(status_code=400, detail=f"unsupported interface_id: {interface_id}")
 
         try:
-            result = await active_agent.run(request.instruction, request.current_file)
-            return to_operation_result(result)
+            return await handler(request)
         except (BusyError, VaultBusyError) as exc:
             logger.warning(
                 "api.apply_busy_rejected",
-                extra={"error": str(exc), "has_current_file": bool(request.current_file)},
+                extra={
+                    "error": str(exc),
+                    "has_current_file": bool(request.current_file),
+                    "interface_id": interface_id,
+                },
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

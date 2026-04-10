@@ -53,12 +53,19 @@ def test_apply_request_missing_instruction_defaults_to_none() -> None:
 
     assert request.instruction is None
     assert request.current_file is None
+    assert request.interface_id is None
 
 
 def test_apply_request_trims_current_file() -> None:
     request = ApplyRequest(instruction="do stuff", current_file="  Projects/Alpha.md  ")
 
     assert request.current_file == "Projects/Alpha.md"
+
+
+def test_apply_request_with_interface_id() -> None:
+    request = ApplyRequest(instruction="do stuff", interface_id=" command ")
+
+    assert request.interface_id == "command"
 
 
 @pytest.mark.parametrize(
@@ -76,3 +83,14 @@ def test_apply_request_trims_current_file() -> None:
 def test_apply_request_rejects_invalid_current_file(current_file: str) -> None:
     with pytest.raises(ValidationError):
         ApplyRequest(instruction="do stuff", current_file=current_file)
+
+
+@pytest.mark.parametrize("interface_id", ["", "   "])
+def test_apply_request_rejects_invalid_interface_id(interface_id: str) -> None:
+    with pytest.raises(ValidationError):
+        ApplyRequest(instruction="do stuff", interface_id=interface_id)
+
+
+def test_apply_request_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        ApplyRequest(instruction="do stuff", current_url_path="/note")

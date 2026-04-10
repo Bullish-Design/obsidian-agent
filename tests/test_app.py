@@ -1,164 +1,267 @@
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from fastapi.testclient import TestClient
+from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from obsidian_agent.config import get_agent_settings
+from obsidian_agent.agent import Agent, BusyError
+from obsidian_agent.app import create_app
+from obsidian_agent.config import AgentConfig
+from obsidian_agent.models import RunResult
+from tests.support.vault_fs import VaultWorkspace
 
 
-@pytest.fixture(autouse=True)
-def clear_settings_cache():
-    get_agent_settings.cache_clear()
-    yield
-    get_agent_settings.cache_clear()
+def text_only_model(text: str) -> FunctionModel:
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        return ModelResponse(parts=[TextPart(text)])
+
+    return FunctionModel(model_fn)
+
+
+def write_note_model(new_content: str) -> FunctionModel:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": new_content})])
+        return ModelResponse(parts=[TextPart("Updated note")])
+
+    return FunctionModel(model_fn)
 
 
 @pytest.fixture
-def vault_dir(tmp_path: Path) -> Path:
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    return vault
+def app_workspace(vault_workspace_factory) -> VaultWorkspace:
+    return vault_workspace_factory("app")
 
 
 @pytest.fixture
-def app(vault_dir: Path):
-    mock_jj = MagicMock()
-    mock_jj.ensure_workspace = AsyncMock()
-    mock_jj.commit = AsyncMock(return_value="committed")
-    mock_jj.undo = AsyncMock(return_value="undone")
+def client(app_workspace: VaultWorkspace, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    vault = Vault(str(app_workspace.work_dir))
+    config = AgentConfig(vault_dir=app_workspace.work_dir)
+    agent = Agent(config, vault)
 
-    mock_agent = MagicMock()
-    mock_tool_runtime = MagicMock()
-    mock_tool_runtime.changed_files = []
-    mock_tool_runtime.reset = MagicMock()
+    def commit_noop(message: str) -> None:
+        _ = message
 
-    mock_settings = MagicMock()
-    mock_settings.vault_dir = vault_dir
-    mock_settings.page_url_prefix = "/"
-    mock_settings.operation_timeout_s = 120
+    class UndoResult:
+        warning = None
 
-    from obsidian_agent.app import app as fastapi_app
+    def undo_noop() -> UndoResult:
+        return UndoResult()
 
-    fastapi_app.state.settings = mock_settings
-    fastapi_app.state.jj = mock_jj
-    fastapi_app.state.agent = mock_agent
-    fastapi_app.state.tool_runtime = mock_tool_runtime
+    async def run_noop(instruction: str, current_file: str | None = None) -> RunResult:
+        _ = instruction, current_file
+        return RunResult(ok=True, updated=False, summary="No changes needed")
 
-    return fastapi_app, mock_agent, mock_jj, mock_tool_runtime, mock_settings
+    monkeypatch.setattr(vault, "commit", commit_noop)
+    monkeypatch.setattr(vault, "undo_last_change", undo_noop)
+    monkeypatch.setattr(agent, "run", run_noop)
+
+    app = create_app(agent)
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        yield test_client
 
 
-def test_health_endpoint(app):
-    fastapi_app, *_ = app
-    client = TestClient(fastapi_app)
+def test_post_apply_valid_request(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Update note.md"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+
+
+def test_post_apply_empty_instruction(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "   "})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"] == "instruction is required"
+
+
+def test_post_apply_with_current_file(client: TestClient) -> None:
+    response = client.post(
+        "/api/apply",
+        json={"instruction": "Summarize this", "current_file": "note.md", "interface_id": "command"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_post_apply_with_invalid_current_file_returns_422(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "../note.md"})
+
+    assert response.status_code == 422
+
+
+def test_post_apply_with_current_url_path_field_returns_422(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_url_path": "/vault/note"})
+
+    assert response.status_code == 422
+
+
+def test_post_apply_with_empty_interface_id_returns_422(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "interface_id": " "})
+
+    assert response.status_code == 422
+
+
+def test_post_apply_unknown_interface_id_returns_400(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "interface_id": "chat"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unsupported interface_id: chat"
+
+
+def test_post_undo(client: TestClient) -> None:
+    response = client.post("/api/undo")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "ok" in data
+
+
+def test_get_health(client: TestClient) -> None:
     response = client.get("/api/health")
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
 
-
-def test_apply_success_with_changes(app):
-    fastapi_app, mock_agent, mock_jj, mock_tool_runtime, _ = app
-
-    async def fake_run(instruction, file_path, on_progress):
-        mock_tool_runtime.changed_files = ["note.md"]
-        return {"summary": "Updated note", "changed_files": ["note.md"]}
-
-    mock_agent.run = AsyncMock(side_effect=fake_run)
-
-    client = TestClient(fastapi_app)
-    response = client.post(
-        "/api/apply",
-        json={"instruction": "Improve note", "current_url_path": "/"},
-    )
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["updated"] is True
-    assert data["summary"] == "Updated note"
-    assert data["changed_files"] == ["note.md"]
-    assert data["error"] is None
-    mock_jj.commit.assert_called_once()
+    assert data["status"] == "healthy"
 
 
-def test_apply_success_no_changes(app):
-    fastapi_app, mock_agent, mock_jj, mock_tool_runtime, _ = app
+def test_apply_response_schema(client: TestClient) -> None:
+    response = client.post("/api/apply", json={"instruction": "Update note.md"})
 
-    async def fake_run(instruction, file_path, on_progress):
-        mock_tool_runtime.changed_files = []
-        return {"summary": "No edits necessary", "changed_files": []}
-
-    mock_agent.run = AsyncMock(side_effect=fake_run)
-
-    client = TestClient(fastapi_app)
-    response = client.post(
-        "/api/apply",
-        json={"instruction": "Check note", "current_url_path": "/"},
-    )
     assert response.status_code == 200
     data = response.json()
-    assert data["ok"] is True
-    assert data["updated"] is False
-    assert data["summary"] == "No edits necessary"
-    assert data["changed_files"] == []
-    mock_jj.commit.assert_not_called()
+
+    assert "ok" in data
+    assert "updated" in data
+    assert "summary" in data
+    assert "changed_files" in data
+    assert "error" in data
+    assert "warning" in data
 
 
-def test_apply_agent_failure(app):
-    fastapi_app, mock_agent, _, _, _ = app
-    mock_agent.run = AsyncMock(side_effect=RuntimeError("LLM connection failed"))
+def test_post_apply_missing_instruction_returns_200_error(client: TestClient) -> None:
+    response = client.post("/api/apply", json={})
 
-    client = TestClient(fastapi_app)
-    response = client.post(
-        "/api/apply",
-        json={"instruction": "Improve note", "current_url_path": "/"},
-    )
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is False
-    assert data["updated"] is False
-    assert "LLM connection failed" in data["error"]
+    assert data["error"] == "instruction is required"
 
 
-def test_apply_timeout(app):
+def test_post_apply_defaults_interface_to_command(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[str, str | None]] = []
 
-    fastapi_app, mock_agent, _, _, mock_settings = app
-    mock_agent.run = AsyncMock(side_effect=TimeoutError())
-    mock_settings.operation_timeout_s = 120
+    async def run_spy(instruction: str, current_file: str | None = None) -> RunResult:
+        captured.append((instruction, current_file))
+        return RunResult(ok=True, updated=False, summary="No changes needed")
 
-    client = TestClient(fastapi_app)
-    response = client.post(
-        "/api/apply",
-        json={"instruction": "Slow operation", "current_url_path": "/"},
-    )
+    monkeypatch.setattr(client.app.state.agent, "run", run_spy)
+
+    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
+
+    assert response.status_code == 200
+    assert captured == [("Summarize this", "note.md")]
+
+
+def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def timeout_run(instruction: str, current_file: str | None = None) -> RunResult:
+        _ = instruction, current_file
+        return RunResult(
+            ok=False,
+            updated=False,
+            summary="",
+            error="Operation timed out after 120s",
+        )
+
+    monkeypatch.setattr(client.app.state.agent, "run", timeout_run)
+
+    response = client.post("/api/apply", json={"instruction": "Timeout me"})
+
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is False
-    assert "timed out" in data["error"]
+    assert data["error"] == "Operation timed out after 120s"
 
 
-def test_undo_success(app):
-    fastapi_app, _, mock_jj, _, _ = app
-    mock_jj.undo = AsyncMock(return_value="undone")
+def test_apply_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def busy_run(instruction: str, current_file: str | None = None) -> RunResult:
+        _ = instruction, current_file
+        raise BusyError("Another operation is already running")
 
-    client = TestClient(fastapi_app)
+    monkeypatch.setattr(client.app.state.agent, "run", busy_run)
+
+    response = client.post("/api/apply", json={"instruction": "Run concurrently"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Another operation is already running"
+
+
+def test_undo_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def busy_undo() -> RunResult:
+        raise BusyError("Another operation is already running")
+
+    monkeypatch.setattr(client.app.state.agent, "undo", busy_undo)
+
     response = client.post("/api/undo")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Another operation is already running"
+
+
+def test_apply_vault_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def vault_busy_run(instruction: str, current_file: str | None = None) -> RunResult:
+        _ = instruction, current_file
+        raise VaultBusyError("vault is busy elsewhere")
+
+    monkeypatch.setattr(client.app.state.agent, "run", vault_busy_run)
+
+    response = client.post("/api/apply", json={"instruction": "Run concurrently"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "vault is busy elsewhere"
+
+
+def test_post_apply_mutates_file_on_disk(
+    app_workspace: VaultWorkspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = Vault(str(app_workspace.work_dir))
+    config = AgentConfig(vault_dir=app_workspace.work_dir)
+    agent = Agent(config, vault)
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+
+    app = create_app(agent)
+    with agent._pydantic_agent.override(model=write_note_model("# Test\nUpdated from API.\n")):
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = test_client.post("/api/apply", json={"instruction": "Update note content"})
+
     assert response.status_code == 200
-    data = response.json()
-    assert data["ok"] is True
-    assert data["updated"] is True
-    assert data["summary"] == "Last change undone."
-    assert data["changed_files"] == []
-    mock_jj.undo.assert_called_once()
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["updated"] is True
+    assert "note.md" in payload["changed_files"]
+    assert vault.read_file("note.md") == "# Test\nUpdated from API.\n"
 
 
-def test_undo_failure(app):
-    fastapi_app, _, mock_jj, _, _ = app
-    mock_jj.undo = AsyncMock(side_effect=RuntimeError("Nothing to undo"))
+def test_default_app_lifespan_from_env(monkeypatch: pytest.MonkeyPatch, app_workspace: VaultWorkspace) -> None:
+    monkeypatch.setenv("AGENT_VAULT_DIR", str(app_workspace.work_dir))
 
-    client = TestClient(fastapi_app)
-    response = client.post("/api/undo")
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        response = test_client.get("/api/health")
+
     assert response.status_code == 200
-    data = response.json()
-    assert data["ok"] is False
-    assert data["updated"] is False
-    assert "Nothing to undo" in data["error"]

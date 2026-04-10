@@ -1,17 +1,14 @@
-"""Executable entrypoint for the Obsidian Agent service."""
-
 import uvicorn
 
-from obsidian_agent.config import get_agent_settings
+from .config import AgentConfig
 
 
 def main() -> None:
-    """Load settings and start the Uvicorn server."""
-    settings = get_agent_settings()
+    config = AgentConfig()
     uvicorn.run(
         "obsidian_agent.app:app",
-        host=settings.host,
-        port=settings.port,
+        host=config.host,
+        port=config.port,
         log_level="info",
     )
 

@@ -1,127 +1,89 @@
-from __future__ import annotations
-
-import asyncio
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+import logging
+from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
 
-from obsidian_agent.agent import Agent
-from obsidian_agent.config import get_agent_settings
-from obsidian_agent.locks import FileLockManager
-from obsidian_agent.models import ApplyRequest, OperationResult
-from obsidian_agent.page_context import resolve_page_path
-from obsidian_agent.tools import ToolRuntime
-from obsidian_agent.vcs import JujutsuHistory
+from .agent import Agent, BusyError
+from .config import AgentConfig
+from .models import ApplyRequest, HealthResponse, OperationResult, RunResult
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    settings = get_agent_settings()
-    jj = JujutsuHistory(settings.vault_dir, settings.jj_bin)
-    await jj.ensure_workspace()
-    lock_manager = FileLockManager()
-    tool_runtime = ToolRuntime(settings, lock_manager, jj)
-    agent = Agent(settings, tool_runtime)
-    app.state.settings = settings
-    app.state.jj = jj
-    app.state.lock_manager = lock_manager
-    app.state.tool_runtime = tool_runtime
-    app.state.agent = agent
-    yield
+logger = logging.getLogger(__name__)
+DEFAULT_INTERFACE_ID = "command"
 
 
-app = FastAPI(lifespan=lifespan)
+def to_operation_result(result: RunResult) -> OperationResult:
+    return OperationResult(
+        ok=result.ok,
+        updated=result.updated,
+        summary=result.summary,
+        changed_files=result.changed_files,
+        error=result.error,
+        warning=result.warning,
+    )
 
 
-@app.get("/api/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+def create_app(agent: Agent | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if agent is not None:
+            app.state.agent = agent
+            yield
+            return
 
+        config = AgentConfig()
+        vault = Vault(str(config.vault_dir), jj_bin=config.jj_bin, jj_timeout=config.jj_timeout)
+        app.state.agent = Agent(config, vault)
+        yield
 
-@app.post("/api/apply")
-async def apply(request: ApplyRequest) -> OperationResult:
-    settings = app.state.settings
-    agent: Agent = app.state.agent
-    jj: JujutsuHistory = app.state.jj
-    tool_runtime: ToolRuntime = app.state.tool_runtime
+    app = FastAPI(lifespan=lifespan)
 
-    try:
-        file_path = request.current_file_path
-        if file_path is None:
-            file_path = resolve_page_path(
-                settings.vault_dir,
-                request.current_url_path,
-                settings.page_url_prefix,
+    async def command_interface_handler(request: ApplyRequest) -> OperationResult:
+        active_agent: Agent = app.state.agent
+        if request.instruction is None or not request.instruction.strip():
+            return OperationResult(ok=False, updated=False, summary="", error="instruction is required")
+        result = await active_agent.run(request.instruction, request.current_file)
+        return to_operation_result(result)
+
+    interface_handlers = {DEFAULT_INTERFACE_ID: command_interface_handler}
+
+    @app.post("/api/apply", response_model=OperationResult)
+    async def apply_instruction(request: ApplyRequest) -> OperationResult:
+        interface_id = request.interface_id or DEFAULT_INTERFACE_ID
+        handler = interface_handlers.get(interface_id)
+        if handler is None:
+            raise HTTPException(status_code=400, detail=f"unsupported interface_id: {interface_id}")
+
+        try:
+            return await handler(request)
+        except (BusyError, VaultBusyError) as exc:
+            logger.warning(
+                "api.apply_busy_rejected",
+                extra={
+                    "error": str(exc),
+                    "has_current_file": bool(request.current_file),
+                    "interface_id": interface_id,
+                },
             )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        tool_runtime.reset()
+    @app.post("/api/undo", response_model=OperationResult)
+    async def undo() -> OperationResult:
+        active_agent: Agent = app.state.agent
+        try:
+            result = await active_agent.undo()
+            return to_operation_result(result)
+        except (BusyError, VaultBusyError) as exc:
+            logger.warning("api.undo_busy_rejected", extra={"error": str(exc)})
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        async def on_progress(msg: str) -> None:
-            pass
+    @app.get("/api/health", response_model=HealthResponse)
+    async def health() -> HealthResponse:
+        return HealthResponse(ok=True, status="healthy")
 
-        result = await asyncio.wait_for(
-            agent.run(
-                instruction=request.instruction,
-                file_path=file_path,
-                on_progress=on_progress,
-            ),
-            timeout=settings.operation_timeout_s,
-        )
-
-        if result["changed_files"]:
-            await jj.commit(message=request.instruction)
-
-        return OperationResult(
-            ok=True,
-            updated=bool(result["changed_files"]),
-            summary=result["summary"],
-            changed_files=result["changed_files"],
-        )
-    except TimeoutError:
-        return OperationResult(
-            ok=False,
-            updated=False,
-            summary="",
-            changed_files=[],
-            error=f"Operation timed out after {settings.operation_timeout_s}s",
-        )
-    except Exception as exc:
-        return OperationResult(
-            ok=False,
-            updated=False,
-            summary="",
-            changed_files=[],
-            error=str(exc),
-        )
+    return app
 
 
-@app.post("/api/undo")
-async def undo() -> OperationResult:
-    settings = app.state.settings
-    jj: JujutsuHistory = app.state.jj
-
-    try:
-        await asyncio.wait_for(jj.undo(), timeout=settings.operation_timeout_s)
-        return OperationResult(
-            ok=True,
-            updated=True,
-            summary="Last change undone.",
-            changed_files=[],
-        )
-    except TimeoutError:
-        return OperationResult(
-            ok=False,
-            updated=False,
-            summary="",
-            changed_files=[],
-            error=f"Operation timed out after {settings.operation_timeout_s}s",
-        )
-    except Exception as exc:
-        return OperationResult(
-            ok=False,
-            updated=False,
-            summary="",
-            changed_files=[],
-            error=str(exc),
-        )
+app = create_app()

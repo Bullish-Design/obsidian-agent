@@ -1,132 +1,261 @@
-from __future__ import annotations
+import asyncio
+import logging
+import httpx
 
-import json
-from collections.abc import Awaitable, Callable
+from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
+from pydantic_ai import Agent as PydanticAgent
+from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.usage import UsageLimits
 
-import openai
+from .config import AgentConfig
+from .models import RunResult
+from .prompt import build_system_prompt
+from .tools import VaultDeps, register_tools
 
-from obsidian_agent.config import AgentSettings
-from obsidian_agent.tools import ToolRuntime, get_tool_definitions
-
-BASE_SYSTEM_PROMPT = """You are an assistant that helps manage and improve notes in an Obsidian vault.
-You have tools to read, write, list, search, fetch URLs, inspect history, and undo changes.
-
-Rules:
-- Preserve YAML frontmatter unless the user asks to change them.
-- Preserve wikilinks unless the user asks to change them.
-- Do not delete content unless the user clearly intends that outcome.
-- Prefer minimal, local edits when possible.
-- When creating new files, use sensible markdown structure.
-- After making changes, summarize what you did briefly.
-"""
-
-NO_FILE_PROMPT = "No specific file is currently selected. The user may be asking about the vault generally."
+logger = logging.getLogger(__name__)
 
 
-def build_system_prompt(current_file_path: str | None) -> str:
-    if current_file_path:
-        return f"{BASE_SYSTEM_PROMPT}\nThe user is currently viewing: {current_file_path}"
-    return f"{BASE_SYSTEM_PROMPT}\n{NO_FILE_PROMPT}"
-
-
-def _summarize_args(arguments: dict) -> str:
-    if not arguments:
-        return ""
-    parts = []
-    for key, value in arguments.items():
-        rendered = str(value)
-        if len(rendered) > 80:
-            rendered = rendered[:77] + "..."
-        parts.append(f"{key}={rendered!r}")
-    return ", ".join(parts)
+class BusyError(Exception):
+    """Raised when the agent is already processing a request."""
 
 
 class Agent:
-    def __init__(self, settings: AgentSettings, tool_runtime: ToolRuntime) -> None:
-        self._settings = settings
-        self._tools = tool_runtime
-        self._client = openai.AsyncOpenAI(
-            base_url=settings.vllm_base_url,
-            api_key=settings.vllm_api_key or "no-key",
+    """Agent orchestration layer.
+
+    Boundary rule: this layer may orchestrate `obsidian_ops.Vault`, but raw filesystem
+    operations and raw `jj` subprocess lifecycle logic must remain in `obsidian-ops`.
+    """
+
+    def __init__(self, config: AgentConfig, vault: Vault | None = None):
+        self.config = config
+        self.vault = vault or Vault(
+            str(config.vault_dir),
+            jj_bin=config.jj_bin,
+            jj_timeout=config.jj_timeout,
+        )
+        self._busy = False
+
+        self._pydantic_agent = PydanticAgent(
+            model=self._build_model(),
+            deps_type=VaultDeps,
+            defer_model_check=True,
+            model_settings={"max_tokens": self.config.llm_max_tokens},
         )
 
-    async def run(
-        self,
-        instruction: str,
-        file_path: str | None,
-        on_progress: Callable[[str], Awaitable[None]],
-    ) -> dict:
-        self._tools.reset()
-        system_prompt = build_system_prompt(file_path)
-        messages: list[dict] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": instruction},
-        ]
-        await on_progress("Agent started")
+        @self._pydantic_agent.instructions
+        def dynamic_instructions(ctx) -> str:  # type: ignore[no-untyped-def]
+            return build_system_prompt(ctx.deps.current_file)
 
-        final_text = ""
-        hit_iteration_cap = True
-        for _ in range(self._settings.max_tool_iterations):
+        register_tools(self._pydantic_agent)
+
+    def _build_model(self) -> str | OpenAIChatModel:
+        if self.config.llm_base_url is None:
+            return self.config.llm_model
+
+        provider, _, configured_model = self.config.llm_model.partition(":")
+        if provider != "openai":
+            logger.info(
+                "llm.base_url_ignored",
+                extra={
+                    "provider": provider,
+                    "model": self.config.llm_model,
+                    "base_url": self.config.llm_base_url,
+                },
+            )
+            return self.config.llm_model
+
+        selected_model = configured_model
+        if self._is_generic_model_name(configured_model):
+            selected_model = self._resolve_model_name_from_base_url(self.config.llm_base_url)
+            logger.info(
+                "llm.model_auto_resolved",
+                extra={"base_url": self.config.llm_base_url, "selected_model": selected_model},
+            )
+        else:
+            logger.info(
+                "llm.model_configured",
+                extra={"base_url": self.config.llm_base_url, "selected_model": selected_model},
+            )
+
+        return OpenAIChatModel(
+            selected_model,
+            provider=OpenAIProvider(base_url=self.config.llm_base_url),
+        )
+
+    @staticmethod
+    def _is_generic_model_name(model_name: str) -> bool:
+        return model_name.strip().lower() in {"", "auto", "default", "local", "generic"}
+
+    @staticmethod
+    def _extract_model_ids(payload: object) -> list[str]:
+        if isinstance(payload, dict):
+            candidates = payload.get("data", [])
+        elif isinstance(payload, list):
+            candidates = payload
+        else:
+            candidates = []
+
+        model_ids: list[str] = []
+        if not isinstance(candidates, list):
+            return model_ids
+
+        for item in candidates:
+            if isinstance(item, str):
+                model_ids.append(item)
+                continue
+            if isinstance(item, dict):
+                model_id = item.get("id") or item.get("model") or item.get("name")
+                if isinstance(model_id, str):
+                    model_ids.append(model_id)
+
+        return model_ids
+
+    def _resolve_model_name_from_base_url(self, base_url: str) -> str:
+        logger.info("llm.model_discovery_start", extra={"base_url": base_url})
+        response = httpx.get(f"{base_url}/models", timeout=10)
+        response.raise_for_status()
+
+        model_ids = self._extract_model_ids(response.json())
+        if not model_ids:
+            msg = f"No models returned from {base_url}/models"
+            raise ValueError(msg)
+
+        if len(model_ids) == 1:
+            logger.info("llm.model_discovery_single", extra={"base_url": base_url, "model": model_ids[0]})
+            return model_ids[0]
+
+        for model_id in model_ids:
+            if "instruct" in model_id.lower():
+                logger.info("llm.model_discovery_instruct_match", extra={"base_url": base_url, "model": model_id})
+                return model_id
+
+        available = ", ".join(model_ids)
+        msg = (
+            f"Multiple models returned from {base_url}/models, but none matched "
+            f"an instruct model: {available}"
+        )
+        raise ValueError(msg)
+
+    @staticmethod
+    def _normalize_commit_message(instruction: str) -> str:
+        normalized = " ".join(instruction.split()).strip()
+        if not normalized:
+            return "obsidian-agent update"
+        return normalized[:72]
+
+    def _acquire_busy(self) -> None:
+        if self._busy:
+            logger.warning("agent.busy_rejected")
+            raise BusyError("Another operation is already running")
+        self._busy = True
+
+    def _release_busy(self) -> None:
+        self._busy = False
+
+    async def run(self, instruction: str, current_file: str | None = None) -> RunResult:
+        self._acquire_busy()
+        logger.info(
+            "agent.run_start",
+            extra={
+                "instruction_len": len(instruction),
+                "has_current_file": bool(current_file),
+                "timeout_s": self.config.operation_timeout,
+            },
+        )
+        try:
+            result = await asyncio.wait_for(
+                self._run_impl(instruction, current_file),
+                timeout=self.config.operation_timeout,
+            )
+            logger.info(
+                "agent.run_complete",
+                extra={
+                    "ok": result.ok,
+                    "updated": result.updated,
+                    "changed_file_count": len(result.changed_files),
+                    "has_warning": bool(result.warning),
+                    "has_error": bool(result.error),
+                },
+            )
+            return result
+        except asyncio.TimeoutError:
+            logger.warning("agent.run_timeout", extra={"timeout_s": self.config.operation_timeout})
+            return RunResult(
+                ok=False,
+                updated=False,
+                summary="",
+                error=f"Operation timed out after {self.config.operation_timeout}s",
+            )
+        finally:
+            self._release_busy()
+
+    async def _run_impl(self, instruction: str, current_file: str | None) -> RunResult:
+        deps = VaultDeps(vault=self.vault, current_file=current_file)
+        limits = UsageLimits(request_limit=self.config.max_iterations)
+
+        try:
+            result = await self._pydantic_agent.run(
+                instruction,
+                deps=deps,
+                usage_limits=limits,
+            )
+        except UsageLimitExceeded:
+            return RunResult(
+                ok=False,
+                updated=False,
+                summary="",
+                error=f"Agent exceeded max iterations ({self.config.max_iterations})",
+            )
+        except ModelAPIError as exc:
+            return RunResult(
+                ok=False,
+                updated=False,
+                summary="",
+                error=f"LLM call failed: {exc}",
+            )
+        except VaultBusyError:
+            raise
+
+        summary = result.output if isinstance(result.output, str) else str(result.output)
+        changed_files = sorted(deps.changed_files)
+
+        warning = None
+        if changed_files:
+            commit_message = self._normalize_commit_message(instruction)
             try:
-                response = await self._client.chat.completions.create(
-                    model=self._settings.vllm_model,
-                    messages=messages,
-                    tools=get_tool_definitions(),
-                    tool_choice="auto",
+                self.vault.commit(commit_message)
+                logger.info(
+                    "agent.commit_success",
+                    extra={"changed_file_count": len(changed_files), "message_len": len(commit_message)},
                 )
             except Exception as exc:
-                raise RuntimeError(f"LLM call failed: {exc}") from exc
-
-            if not response.choices:
-                raise RuntimeError("LLM call failed: empty response choices")
-
-            assistant_message = response.choices[0].message
-            assistant_payload: dict = {
-                "role": "assistant",
-                "content": assistant_message.content or "",
-            }
-            if assistant_message.tool_calls:
-                assistant_payload["tool_calls"] = [
-                    {
-                        "id": tool_call.id,
-                        "type": tool_call.type,
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments,
-                        },
-                    }
-                    for tool_call in assistant_message.tool_calls
-                ]
-            messages.append(assistant_payload)
-
-            if not assistant_message.tool_calls:
-                final_text = assistant_message.content or ""
-                hit_iteration_cap = False
-                break
-
-            for tool_call in assistant_message.tool_calls:
-                tool_name = tool_call.function.name
-                try:
-                    arguments = json.loads(tool_call.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
-                await on_progress(f"Calling {tool_name}({_summarize_args(arguments)})")
-                result = await self._tools.call_tool(tool_name, arguments)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result,
-                    }
+                warning = f"Commit failed: {exc}"
+                logger.exception(
+                    "agent.commit_failed",
+                    extra={"changed_file_count": len(changed_files), "message_len": len(commit_message)},
                 )
 
-        if hit_iteration_cap:
-            limit_note = "Agent hit its iteration limit before completing."
-            final_text = f"{final_text}\n{limit_note}".strip() if final_text else limit_note
+        return RunResult(
+            ok=True,
+            updated=bool(changed_files),
+            summary=summary,
+            changed_files=changed_files,
+            warning=warning,
+        )
 
-        result = {
-            "summary": final_text,
-            "changed_files": self._tools.changed_files,
-        }
-        await on_progress(final_text)
-        return result
+    async def undo(self) -> RunResult:
+        self._acquire_busy()
+        logger.info("agent.undo_start")
+        try:
+            undo_result = self.vault.undo_last_change()
+            warning = getattr(undo_result, "warning", None)
+            logger.info("agent.undo_complete", extra={"has_warning": bool(warning)})
+            return RunResult(ok=True, updated=True, summary="Last change undone.", warning=warning)
+        except Exception as exc:
+            logger.exception("agent.undo_failed")
+            return RunResult(ok=False, updated=False, summary="", error=f"undo failed: {exc}")
+        finally:
+            self._release_busy()

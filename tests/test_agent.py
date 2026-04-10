@@ -1,154 +1,432 @@
+import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
+from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.openai import OpenAIChatModel
 
-from obsidian_agent.agent import Agent, build_system_prompt
+from obsidian_agent.agent import Agent, BusyError
+from obsidian_agent.config import AgentConfig
 
-
-class FakeSettings:
-    def __init__(self):
-        self.vault_dir = Path("/tmp/vault")
-        self.vllm_base_url = "http://localhost:8000/v1"
-        self.vllm_model = "test-model"
-        self.vllm_api_key = ""
-        self.max_tool_iterations = 5
-
-
-class FakeToolRuntime:
-    def __init__(self):
-        self.changed_files: list[str] = []
-        self._reset_called = False
-
-    def reset(self):
-        self.changed_files = []
-        self._reset_called = True
-
-    async def call_tool(self, name: str, arguments: dict) -> str:
-        if name == "write_file":
-            self.changed_files.append(arguments.get("path", "unknown.md"))
-            return f"Wrote {arguments.get('path', 'unknown.md')}"
-        return f"Tool {name} result"
+pytestmark = pytest.mark.anyio
 
 
-@pytest.mark.asyncio
-async def test_agent_tool_call_dispatch():
-    settings = FakeSettings()
-    tools = FakeToolRuntime()
-    agent = Agent(settings, tools)
+@pytest.fixture
+def agent(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> Agent:
+    config = AgentConfig(vault_dir=Path(vault.root))
+    instance = Agent(config, vault)
 
-    progress_messages = []
+    def commit_noop(message: str) -> None:
+        _ = message
 
-    async def on_progress(msg: str):
-        progress_messages.append(msg)
-
-    mock_response = MagicMock()
-    mock_tool_call = MagicMock()
-    mock_tool_call.id = "call_1"
-    mock_tool_call.type = "function"
-    mock_tool_call.function.name = "write_file"
-    mock_tool_call.function.arguments = '{"path": "note.md", "content": "hello"}'
-    mock_response.choices = [MagicMock(message=MagicMock(content=None, tool_calls=[mock_tool_call]))]
-
-    mock_final_response = MagicMock()
-    mock_final_response.choices = [MagicMock(message=MagicMock(content="Done", tool_calls=None))]
-
-    agent._client.chat.completions.create = AsyncMock(side_effect=[mock_response, mock_final_response])
-
-    result = await agent.run("Improve note", "note.md", on_progress)
-
-    assert "Agent started" in progress_messages
-    assert result["summary"] == "Done"
-    assert result["changed_files"] == ["note.md"]
+    monkeypatch.setattr(vault, "commit", commit_noop)
+    return instance
 
 
-@pytest.mark.asyncio
-async def test_agent_iteration_cap():
-    settings = FakeSettings()
-    settings.max_tool_iterations = 2
-    tools = FakeToolRuntime()
-    agent = Agent(settings, tools)
+def scripted_read_write_model() -> FunctionModel:
+    turn = {"value": 0}
 
-    progress_messages = []
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("read_file", {"path": "note.md"})])
+        if current == 1:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Updated note.md")])
 
-    async def on_progress(msg: str):
-        progress_messages.append(msg)
+    return FunctionModel(model_fn)
 
-    mock_tool_call = MagicMock()
-    mock_tool_call.id = "call_1"
-    mock_tool_call.type = "function"
-    mock_tool_call.function.name = "write_file"
-    mock_tool_call.function.arguments = '{"path": "note.md", "content": "hello"}'
 
-    agent._client.chat.completions.create = AsyncMock(
-        return_value=MagicMock(choices=[MagicMock(message=MagicMock(content=None, tool_calls=[mock_tool_call]))])
+def text_only_model(text: str = "No changes") -> FunctionModel:
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        return ModelResponse(parts=[TextPart(text)])
+
+    return FunctionModel(model_fn)
+
+
+async def test_happy_path(agent: Agent, vault: Vault) -> None:
+    with agent._pydantic_agent.override(model=scripted_read_write_model()):
+        result = await agent.run("Update note.md")
+
+    assert result.ok is True
+    assert result.updated is True
+    assert "note.md" in result.changed_files
+    assert result.summary
+    assert vault.read_file("note.md") == "updated"
+
+
+async def test_no_changes_text_only_response(agent: Agent) -> None:
+    with agent._pydantic_agent.override(model=text_only_model("No edits required")):
+        result = await agent.run("Check note")
+
+    assert result.ok is True
+    assert result.updated is False
+    assert result.changed_files == []
+
+
+async def test_tool_execution_error_is_non_fatal(agent: Agent) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("read_file", {"path": "nonexistent.md"})])
+        return ModelResponse(parts=[TextPart("Handled missing file")])
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run("Read missing file")
+
+    assert result.ok is True
+    assert result.updated is False
+
+
+async def test_usage_limit_exceeded(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AgentConfig(vault_dir=Path(vault.root), max_iterations=2)
+    limited_agent = Agent(config, vault)
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        return ModelResponse(parts=[ToolCallPart("read_file", {"path": "note.md"})])
+
+    with limited_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await limited_agent.run("Loop forever")
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "max iterations" in result.error.lower()
+
+
+async def test_changed_files_read_tools_not_tracked(agent: Agent) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("read_file", {"path": "note.md"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run("Read note")
+
+    assert result.changed_files == []
+
+
+async def test_changed_files_write_tools_tracked(agent: Agent) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "new.md", "content": "hello"})])
+        if current == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("write_heading", {"path": "note.md", "heading": "# Hello", "content": "new"})]
+            )
+        return ModelResponse(parts=[TextPart("Done")])
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run("Update multiple files")
+
+    assert sorted(result.changed_files) == ["new.md", "note.md"]
+
+
+async def test_busy_error_on_concurrent_run(agent: Agent) -> None:
+    async def slow_model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        await asyncio.sleep(0.3)
+        return ModelResponse(parts=[TextPart("done")])
+
+    with agent._pydantic_agent.override(model=FunctionModel(slow_model_fn)):
+        task = asyncio.create_task(agent.run("slow task"))
+        await asyncio.sleep(0.05)
+        with pytest.raises(BusyError):
+            await agent.run("second task")
+        await task
+
+
+async def test_vault_busy_error_propagates(agent: Agent, vault: Vault) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    def busy_write(path: str, content: str) -> None:
+        _ = path, content
+        raise VaultBusyError("vault is busy elsewhere")
+
+    vault.write_file = busy_write  # type: ignore[method-assign]
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        with pytest.raises(VaultBusyError, match="vault is busy elsewhere"):
+            await agent.run("Update note")
+
+
+async def test_undo_success(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    class UndoResult:
+        warning = None
+
+    def undo_last_change() -> UndoResult:
+        return UndoResult()
+
+    monkeypatch.setattr(vault, "undo_last_change", undo_last_change)
+
+    result = await agent.undo()
+
+    assert result.ok is True
+    assert result.summary == "Last change undone."
+
+
+async def test_undo_uses_undo_last_change_api(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class UndoResult:
+        warning = None
+
+    def undo_last_change() -> UndoResult:
+        calls.append("undo_last_change")
+        return UndoResult()
+
+    monkeypatch.setattr(vault, "undo_last_change", undo_last_change)
+
+    result = await agent.undo()
+
+    assert result.ok is True
+    assert calls == ["undo_last_change"]
+
+
+async def test_undo_surfaces_warning_from_ops(
+    agent: Agent,
+    vault: Vault,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UndoResult:
+        warning = "restore after undo failed: restore failed"
+
+    def undo_last_change() -> UndoResult:
+        return UndoResult()
+
+    monkeypatch.setattr(vault, "undo_last_change", undo_last_change)
+
+    result = await agent.undo()
+
+    assert result.ok is True
+    assert result.warning == "restore after undo failed: restore failed"
+
+
+async def test_undo_failure(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    def undo_fail() -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(vault, "undo_last_change", undo_fail)
+
+    result = await agent.undo()
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "undo failed" in result.error
+
+
+async def test_commit_failure_after_changes(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    def commit_fail(message: str) -> None:
+        _ = message
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(vault, "commit", commit_fail)
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run("Update note")
+
+    assert result.ok is True
+    assert result.warning is not None
+    assert "Commit failed" in result.warning
+
+
+async def test_commit_uses_normalized_instruction_message(
+    agent: Agent,
+    vault: Vault,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turn = {"value": 0}
+    commit_messages: list[str] = []
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    def commit_spy(message: str) -> None:
+        commit_messages.append(message)
+
+    monkeypatch.setattr(vault, "commit", commit_spy)
+
+    instruction = "   This   is   a   very   long   instruction   " + ("x" * 200)
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run(instruction)
+
+    assert result.ok is True
+    assert len(commit_messages) == 1
+    assert commit_messages[0] == Agent._normalize_commit_message(instruction)
+
+
+async def test_model_api_error_is_reported(agent: Agent) -> None:
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        raise ModelAPIError("test-model", "api down")
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run("Trigger API error")
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.startswith("LLM call failed:")
+
+
+async def test_run_timeout_returns_error(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AgentConfig(vault_dir=Path(vault.root), operation_timeout=1)
+    timeout_agent = Agent(config, vault)
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+
+    async def slow_model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        await asyncio.sleep(0.05)
+        return ModelResponse(parts=[TextPart("done")])
+
+    async def wait_for_timeout(awaitable, timeout):  # type: ignore[no-untyped-def]
+        _ = timeout
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("obsidian_agent.agent.asyncio.wait_for", wait_for_timeout)
+
+    with timeout_agent._pydantic_agent.override(model=FunctionModel(slow_model_fn)):
+        result = await timeout_agent.run("slow task")
+
+    assert result.ok is False
+    assert result.error == "Operation timed out after 1s"
+    assert timeout_agent._busy is False
+
+
+def test_normalize_commit_message() -> None:
+    assert Agent._normalize_commit_message("   a   b   c   ") == "a b c"
+    assert Agent._normalize_commit_message("   ") == "obsidian-agent update"
+    assert len(Agent._normalize_commit_message("x" * 200)) == 72
+
+
+def test_extract_model_ids_variants() -> None:
+    from_dict = Agent._extract_model_ids({"data": [{"id": "a"}, {"model": "b"}, {"name": "c"}, "d"]})
+    from_list = Agent._extract_model_ids(["x", {"id": "y"}])
+    from_other = Agent._extract_model_ids("invalid")
+
+    assert from_dict == ["a", "b", "c", "d"]
+    assert from_list == ["x", "y"]
+    assert from_other == []
+
+
+def test_build_model_with_non_openai_provider_keeps_string(vault: Vault) -> None:
+    config = AgentConfig(
+        vault_dir=Path(vault.root),
+        llm_model="anthropic:claude-sonnet-4-20250514",
+        llm_base_url="http://localhost:8000/v1",
     )
+    instance = Agent(config, vault)
 
-    result = await agent.run("Improve note", None, on_progress)
-
-    assert "iteration limit" in result["summary"]
+    assert instance._build_model() == "anthropic:claude-sonnet-4-20250514"
 
 
-@pytest.mark.asyncio
-async def test_agent_no_tool_calls():
-    settings = FakeSettings()
-    tools = FakeToolRuntime()
-    agent = Agent(settings, tools)
-
-    progress_messages = []
-
-    async def on_progress(msg: str):
-        progress_messages.append(msg)
-
-    agent._client.chat.completions.create = AsyncMock(
-        return_value=MagicMock(choices=[MagicMock(message=MagicMock(content="Here is my answer", tool_calls=None))])
+def test_build_model_with_openai_auto_uses_resolved_model(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Agent, "_resolve_model_name_from_base_url", lambda self, base_url: "resolved-instruct")
+    config = AgentConfig(
+        vault_dir=Path(vault.root),
+        llm_model="openai:auto",
+        llm_base_url="http://localhost:8000/v1",
     )
+    instance = Agent(config, vault)
 
-    result = await agent.run("What is this?", None, on_progress)
+    model = instance._build_model()
 
-    assert result["summary"] == "Here is my answer"
-    assert result["changed_files"] == []
-
-
-@pytest.mark.asyncio
-async def test_agent_llm_failure():
-    settings = FakeSettings()
-    tools = FakeToolRuntime()
-    agent = Agent(settings, tools)
-
-    async def on_progress(msg: str):
-        pass
-
-    agent._client.chat.completions.create = AsyncMock(side_effect=Exception("Connection refused"))
-
-    with pytest.raises(RuntimeError, match="LLM call failed"):
-        await agent.run("Improve note", None, on_progress)
+    assert isinstance(model, OpenAIChatModel)
 
 
-@pytest.mark.asyncio
-async def test_agent_resets_changed_files():
-    settings = FakeSettings()
-    tools = FakeToolRuntime()
-    tools.changed_files = ["old.md"]
-    agent = Agent(settings, tools)
+def test_resolve_model_name_prefers_instruct(agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
 
-    async def on_progress(msg: str):
-        pass
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"data": [{"id": "base-model"}, {"id": "best-instruct-model"}]}
 
-    agent._client.chat.completions.create = AsyncMock(
-        return_value=MagicMock(choices=[MagicMock(message=MagicMock(content="Done", tool_calls=None))])
-    )
+    monkeypatch.setattr("obsidian_agent.agent.httpx.get", lambda url, timeout: DummyResponse())
 
-    await agent.run("Test", None, on_progress)
-    assert tools.changed_files == []
+    result = agent._resolve_model_name_from_base_url("http://localhost:8000/v1")
+
+    assert result == "best-instruct-model"
 
 
-def test_build_system_prompt_with_file():
-    prompt = build_system_prompt("notes/example.md")
-    assert "notes/example.md" in prompt
-    assert "currently viewing" in prompt
+def test_resolve_model_name_raises_when_empty(agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"data": []}
+
+    monkeypatch.setattr("obsidian_agent.agent.httpx.get", lambda url, timeout: DummyResponse())
+
+    with pytest.raises(ValueError):
+        agent._resolve_model_name_from_base_url("http://localhost:8000/v1")
 
 
-def test_build_system_prompt_without_file():
-    prompt = build_system_prompt(None)
-    assert "No specific file" in prompt
+def test_resolve_model_name_raises_when_no_instruct_match(agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"data": [{"id": "embedding-model"}, {"id": "base-chat-model"}]}
+
+    monkeypatch.setattr("obsidian_agent.agent.httpx.get", lambda url, timeout: DummyResponse())
+
+    with pytest.raises(ValueError, match="none matched an instruct model"):
+        agent._resolve_model_name_from_base_url("http://localhost:8000/v1")

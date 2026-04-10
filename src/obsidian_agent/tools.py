@@ -1,225 +1,204 @@
-from __future__ import annotations
-
+from dataclasses import dataclass, field
 import json
-from pathlib import Path
+from typing import Any
 
-import httpx
-
-from obsidian_agent.config import AgentSettings
-from obsidian_agent.fs_atomic import read_file_safe, validate_vault_path, write_file_atomic
-from obsidian_agent.locks import FileLockManager
-from obsidian_agent.vcs import JujutsuHistory
-
-FETCH_URL_LIMIT_BYTES = 120 * 1024
+from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError, VaultError
+from pydantic_ai import RunContext
 
 
-class ToolRuntime:
-    def __init__(self, settings: AgentSettings, lock_manager: FileLockManager, jj: JujutsuHistory) -> None:
-        self._settings = settings
-        self._locks = lock_manager
-        self._jj = jj
-        self.changed_files: list[str] = []
-
-    def reset(self) -> None:
-        self.changed_files = []
-
-    async def read_file(self, path: str) -> str:
-        abs_path = validate_vault_path(self._settings.vault_dir, Path(path))
-        return read_file_safe(abs_path)
-
-    async def write_file(self, path: str, content: str) -> str:
-        abs_path = validate_vault_path(self._settings.vault_dir, Path(path))
-        lock = self._locks.get_lock(str(abs_path))
-        async with lock:
-            write_file_atomic(abs_path, content)
-        relative_path = abs_path.relative_to(self._settings.vault_dir).as_posix()
-        if relative_path not in self.changed_files:
-            self.changed_files.append(relative_path)
-        return f"Wrote {relative_path} ({len(content.encode('utf-8'))} bytes)"
-
-    async def list_files(self, glob_pattern: str = "**/*.md") -> list[str]:
-        vault_dir = self._settings.vault_dir
-        files = [path.relative_to(vault_dir).as_posix() for path in vault_dir.glob(glob_pattern) if path.is_file()]
-        return sorted(files)
-
-    async def search_files(self, query: str, glob_pattern: str = "**/*.md") -> list[dict]:
-        if not query:
-            return []
-
-        query_lower = query.lower()
-        results: list[dict] = []
-        for path in self._settings.vault_dir.glob(glob_pattern):
-            if not path.is_file():
-                continue
-
-            content = read_file_safe(path)
-            lines = content.splitlines()
-            for idx, line in enumerate(lines):
-                if query_lower not in line.lower():
-                    continue
-
-                start = max(0, idx - 1)
-                end = min(len(lines), idx + 2)
-                snippet = "\n".join(lines[start:end])
-                results.append(
-                    {
-                        "path": path.relative_to(self._settings.vault_dir).as_posix(),
-                        "snippet": snippet,
-                    }
-                )
-                if len(results) >= self._settings.max_search_results:
-                    return results
-        return results
-
-    async def fetch_url(self, url: str) -> str:
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                text = response.text
-                encoded = text.encode("utf-8")
-                if len(encoded) > FETCH_URL_LIMIT_BYTES:
-                    return encoded[:FETCH_URL_LIMIT_BYTES].decode("utf-8", errors="ignore")
-                return text
-        except Exception as exc:  # noqa: BLE001
-            return f"Failed to fetch URL '{url}': {exc}"
-
-    async def undo_last_change(self) -> str:
-        return await self._jj.undo()
-
-    async def get_file_history(self, path: str, limit: int = 10) -> list[str]:
-        abs_path = validate_vault_path(self._settings.vault_dir, Path(path))
-        relative_path = abs_path.relative_to(self._settings.vault_dir).as_posix()
-        return await self._jj.log_for_file(relative_path, limit)
-
-    async def call_tool(self, name: str, arguments: dict) -> str:
-        try:
-            if name == "read_file":
-                return await self.read_file(arguments["path"])
-            if name == "write_file":
-                return await self.write_file(arguments["path"], arguments["content"])
-            if name == "list_files":
-                return json.dumps(await self.list_files(arguments.get("glob_pattern", "**/*.md")))
-            if name == "search_files":
-                return json.dumps(await self.search_files(arguments["query"], arguments.get("glob_pattern", "**/*.md")))
-            if name == "fetch_url":
-                return await self.fetch_url(arguments["url"])
-            if name == "undo_last_change":
-                return await self.undo_last_change()
-            if name == "get_file_history":
-                return json.dumps(await self.get_file_history(arguments["path"], int(arguments.get("limit", 10))))
-            return f"Unknown tool: {name}"
-        except Exception as exc:  # noqa: BLE001
-            return f"Tool '{name}' failed: {exc}"
+@dataclass
+class VaultDeps:
+    vault: Vault
+    changed_files: set[str] = field(default_factory=set)
+    current_file: str | None = None
 
 
-def get_tool_definitions() -> list[dict]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read the contents of a markdown file in the vault.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Vault-relative file path (e.g. 'notes/example.md')",
-                        }
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "Write markdown content to a file in the vault.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Vault-relative file path (e.g. 'notes/example.md')",
-                        },
-                        "content": {"type": "string", "description": "The full file content to write."},
-                    },
-                    "required": ["path", "content"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_files",
-                "description": "List files in the vault matching a glob pattern.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "glob_pattern": {
-                            "type": "string",
-                            "description": "Glob pattern relative to vault root (default '**/*.md').",
-                        }
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_files",
-                "description": "Search vault files for a text query and return contextual snippets.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Case-insensitive substring query."},
-                        "glob_pattern": {
-                            "type": "string",
-                            "description": "Glob pattern relative to vault root (default '**/*.md').",
-                        },
-                    },
-                    "required": ["query"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "fetch_url",
-                "description": "Fetch text content from an HTTP URL.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"url": {"type": "string", "description": "Absolute URL to fetch."}},
-                    "required": ["url"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "undo_last_change",
-                "description": "Undo the most recent Jujutsu change in the vault.",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_file_history",
-                "description": "Return recent change history entries for a vault file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Vault-relative file path (e.g. 'notes/example.md').",
-                        },
-                        "limit": {"type": "integer", "description": "Maximum number of entries to return."},
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-    ]
+WRITE_TOOLS = {
+    "write_file",
+    "delete_file",
+    "set_frontmatter",
+    "update_frontmatter",
+    "delete_frontmatter_field",
+    "write_heading",
+    "write_block",
+}
+
+
+async def read_file(ctx: RunContext[VaultDeps], path: str) -> str:
+    """Read the contents of a file in the vault. Path is relative to vault root."""
+    try:
+        return ctx.deps.vault.read_file(path)
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def write_file(ctx: RunContext[VaultDeps], path: str, content: str) -> str:
+    """Write content to a file in the vault. Creates or overwrites. Path is relative to vault root."""
+    try:
+        ctx.deps.vault.write_file(path, content)
+        ctx.deps.changed_files.add(path)
+        return f"Successfully wrote {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def delete_file(ctx: RunContext[VaultDeps], path: str) -> str:
+    """Delete a file from the vault. Path is relative to vault root."""
+    try:
+        ctx.deps.vault.delete_file(path)
+        ctx.deps.changed_files.add(path)
+        return f"Deleted {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def list_files(ctx: RunContext[VaultDeps], pattern: str) -> str:
+    """List files in the vault matching a filename glob pattern, e.g. '*.md'."""
+    try:
+        files = ctx.deps.vault.list_files(pattern)
+        if not files:
+            return "No files found."
+        return f"Found {len(files)} files:\n" + "\n".join(files)
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def search_files(ctx: RunContext[VaultDeps], query: str, glob: str = "*.md") -> str:
+    """Search file contents for a text query. Returns matching files with context snippets."""
+    try:
+        results = ctx.deps.vault.search_files(query, glob=glob)
+        if not results:
+            return "No matches found."
+        lines = [f"Found {len(results)} matching files:"]
+        for result in results:
+            lines.append(f"\n--- {result.path} ---\n{result.snippet}")
+        return "\n".join(lines)
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def get_frontmatter(ctx: RunContext[VaultDeps], path: str) -> str:
+    """Read the YAML frontmatter from a vault file. Returns JSON object or null."""
+    try:
+        frontmatter = ctx.deps.vault.get_frontmatter(path)
+        if frontmatter is None:
+            return "No frontmatter found."
+        return json.dumps(frontmatter, indent=2, default=str)
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def update_frontmatter(ctx: RunContext[VaultDeps], path: str, updates: dict[str, Any]) -> str:
+    """Update specific fields in a file's YAML frontmatter. Only specified fields change."""
+    try:
+        ctx.deps.vault.update_frontmatter(path, updates)
+        ctx.deps.changed_files.add(path)
+        return f"Updated frontmatter for {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def set_frontmatter(ctx: RunContext[VaultDeps], path: str, data: dict[str, Any]) -> str:
+    """Replace a file's entire YAML frontmatter with the provided object."""
+    try:
+        ctx.deps.vault.set_frontmatter(path, data)
+        ctx.deps.changed_files.add(path)
+        return f"Set frontmatter for {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def delete_frontmatter_field(ctx: RunContext[VaultDeps], path: str, field: str) -> str:
+    """Delete a specific YAML frontmatter field from a file."""
+    try:
+        ctx.deps.vault.delete_frontmatter_field(path, field)
+        ctx.deps.changed_files.add(path)
+        return f"Deleted frontmatter field '{field}' from {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def read_heading(ctx: RunContext[VaultDeps], path: str, heading: str) -> str:
+    """Read content under a heading. Heading includes '#' prefix, e.g. '## Summary'."""
+    try:
+        content = ctx.deps.vault.read_heading(path, heading)
+        if content is None:
+            return f"Heading '{heading}' not found in {path}"
+        return content
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def write_heading(ctx: RunContext[VaultDeps], path: str, heading: str, content: str) -> str:
+    """Replace content under a heading. If heading doesn't exist, it's appended."""
+    try:
+        ctx.deps.vault.write_heading(path, heading, content)
+        ctx.deps.changed_files.add(path)
+        return f"Updated heading '{heading}' in {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def read_block(ctx: RunContext[VaultDeps], path: str, block_id: str) -> str:
+    """Read the content of a block identified by its ^block-id."""
+    try:
+        content = ctx.deps.vault.read_block(path, block_id)
+        if content is None:
+            return f"Block '{block_id}' not found in {path}"
+        return content
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+async def write_block(ctx: RunContext[VaultDeps], path: str, block_id: str, content: str) -> str:
+    """Replace the content of a block identified by its ^block-id."""
+    try:
+        ctx.deps.vault.write_block(path, block_id, content)
+        ctx.deps.changed_files.add(path)
+        return f"Updated block '{block_id}' in {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
+def register_tools(agent: Any) -> None:
+    """Register all vault tools on a pydantic-ai Agent."""
+    agent.tool(read_file)
+    agent.tool(write_file)
+    agent.tool(delete_file)
+    agent.tool(list_files)
+    agent.tool(search_files)
+    agent.tool(get_frontmatter)
+    agent.tool(set_frontmatter)
+    agent.tool(update_frontmatter)
+    agent.tool(delete_frontmatter_field)
+    agent.tool(read_heading)
+    agent.tool(write_heading)
+    agent.tool(read_block)
+    agent.tool(write_block)

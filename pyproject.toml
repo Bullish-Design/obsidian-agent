@@ -1,89 +1,40 @@
 [project]
 name = "obsidian-agent"
-version = "0.1.0"
-description = "Obsidian agent service for vault operations."
-readme = "README.md"
+version = "0.1.1"
 requires-python = ">=3.13"
-license = { text = "MIT" }
-
-authors = [
-  { name = "Bullish Design", email = "BullishDesignEngineering@gmail.com" },
-]
-
 dependencies = [
-  "pydantic>=2.12.5",
-  "pydantic-settings>=2.0.0",
-  "fastapi>=0.115.0",
-  "uvicorn>=0.34.0",
-  "openai>=1.60.0",
-  "httpx>=0.28.0",
+    "obsidian-ops",
+    "pydantic-ai>=1.7,<2.0",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "httpx>=0.28.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=7.0",
-  "pytest-asyncio>=0.24.0",
-  "pytest-cov>=4.1",
-  "ruff>=0.5.0",
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "pytest-asyncio>=0.25.0",
+    "anyio>=4.0",
+    "coverage>=7.0",
 ]
 
-#[project.urls]
-#homepage = "https://github.com/Bullish-Design/obsidian-agent"
-#repository = "https://github.com/Bullish-Design/obsidian-agent.git"
+[tool.uv.sources]
+obsidian-ops = { git = "https://github.com/Bullish-Design/obsidian-ops.git", tag = "v0.4.0" }
+
+[project.scripts]
+obsidian-agent = "obsidian_agent.__main__:main"
+obsidian-agent-demo = "obsidian_agent.demo:main"
 
 [build-system]
-requires = ["hatchling>=1.18"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# Tell hatch which package to ship (your code lives in src/obsidian_agent)
 packages = ["src/obsidian_agent"]
 
-[tool.hatch.build.targets.sdist]
-include = [
-  "src",
-  "README.md",
-#  "SPEC.md",
-#  "docs",
-  "tests",
-  "pyproject.toml",
-]
-
-[tool.uv]
-# Keep the default behavior; this section is here so you can extend it later if needed.
-
 [tool.pytest.ini_options]
-addopts = "-q --cov=obsidian_agent --cov-report=term-missing"
 testpaths = ["tests"]
-
-[tool.mypy]
-python_version = "3.13"
-packages = ["obsidian_agent"]
-strict = true
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_calls = true
-no_implicit_optional = true
-
-[tool.ruff]
-line-length = 120
-target-version = "py313"
-src = ["src"]
-
-[tool.ruff.lint]
-select = [
-  "E",
-  "F",
-  "I",
-  "UP",
-  "B",
-]
-ignore = []
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "lf"
+asyncio_mode = "auto"

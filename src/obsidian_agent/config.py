@@ -1,43 +1,62 @@
-from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from urllib.parse import urlparse, urlunparse
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class AgentSettings(BaseSettings):
-    """Runtime settings for the Obsidian Agent service."""
+class AgentConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="AGENT_", extra="ignore")
 
     vault_dir: Path
-    vllm_base_url: str = "http://127.0.0.1:8000/v1"
-    vllm_model: str = "local-model"
-    vllm_api_key: str = ""
+    llm_model: str = "anthropic:claude-sonnet-4-20250514"
+    llm_base_url: str | None = None
+    llm_max_tokens: int = Field(default=4096, gt=0)
+    max_iterations: int = Field(default=20, gt=0)
+    operation_timeout: int = Field(default=120, gt=0)
     jj_bin: str = "jj"
+    jj_timeout: int = Field(default=120, gt=0)
     host: str = "127.0.0.1"
-    port: int = 8081
-    max_tool_iterations: int = 12
-    max_search_results: int = 12
-    page_url_prefix: str = "/"
-    operation_timeout_s: int = 120
+    port: int = Field(default=8081, ge=1, le=65535)
 
-    @field_validator("vault_dir", mode="before")
+    @field_validator("vault_dir")
     @classmethod
-    def validate_vault_dir(cls, v: Any) -> Path:
-        if isinstance(v, str):
-            v = Path(v)
-        if not isinstance(v, Path):
-            raise ValueError("vault_dir must be a Path")
-        if not v.exists():
-            raise ValueError(f"Vault directory does not exist: {v}")
-        if not v.is_dir():
-            raise ValueError(f"Vault path is not a directory: {v}")
-        return v
+    def validate_vault_dir(cls, value: Path) -> Path:
+        if not value.exists():
+            msg = f"vault_dir does not exist: {value}"
+            raise ValueError(msg)
+        if not value.is_dir():
+            msg = f"vault_dir is not a directory: {value}"
+            raise ValueError(msg)
+        return value
 
-    model_config = {"env_prefix": "AGENT_", "extra": "ignore"}
+    @field_validator("llm_model")
+    @classmethod
+    def validate_llm_model(cls, value: str) -> str:
+        if ":" not in value:
+            msg = "llm_model must be in 'provider:model-name' format"
+            raise ValueError(msg)
+        provider, model_name = value.split(":", 1)
+        if not provider.strip() or not model_name.strip():
+            msg = "llm_model must include non-empty provider and model name"
+            raise ValueError(msg)
+        return value
 
+    @field_validator("llm_base_url")
+    @classmethod
+    def normalize_llm_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
 
-@lru_cache(maxsize=1)
-def get_agent_settings() -> AgentSettings:
-    """Return a cached AgentSettings instance."""
-    return AgentSettings()
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"}:
+            msg = "llm_base_url must use http or https"
+            raise ValueError(msg)
+        if not parsed.netloc:
+            msg = "llm_base_url must include a host"
+            raise ValueError(msg)
+        normalized_path = parsed.path.rstrip("/")
+        if not normalized_path:
+            normalized_path = "/v1"
+
+        return urlunparse(parsed._replace(path=normalized_path))

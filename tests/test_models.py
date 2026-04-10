@@ -1,80 +1,96 @@
-from obsidian_agent.models import ApplyRequest, OperationResult
+import pytest
+from pydantic import ValidationError
+
+from obsidian_agent.models import ApplyRequest, OperationResult, RunResult
 
 
-def test_apply_request_minimal():
-    req = ApplyRequest(instruction="Add a summary", current_url_path="/")
-    assert req.instruction == "Add a summary"
-    assert req.current_url_path == "/"
-    assert req.current_file_path is None
+def test_run_result_defaults() -> None:
+    result = RunResult(ok=True, updated=False, summary="done")
 
-
-def test_apply_request_with_file_path():
-    req = ApplyRequest(
-        instruction="Edit note",
-        current_url_path="/notes/example",
-        current_file_path="notes/example.md",
-    )
-    assert req.current_file_path == "notes/example.md"
-
-
-def test_operation_result_defaults():
-    result = OperationResult(ok=True, updated=False)
-    assert result.ok is True
-    assert result.updated is False
-    assert result.summary == ""
     assert result.changed_files == []
-    assert result.warning is None
     assert result.error is None
+    assert result.warning is None
 
 
-def test_operation_result_with_values():
+def test_operation_result_serialization() -> None:
     result = OperationResult(
         ok=True,
         updated=True,
-        summary="Added section.",
-        changed_files=["notes/example.md"],
-        warning=None,
+        summary="updated",
+        changed_files=["note.md"],
         error=None,
-    )
-    assert result.ok is True
-    assert result.updated is True
-    assert result.summary == "Added section."
-    assert result.changed_files == ["notes/example.md"]
-    assert result.warning is None
-    assert result.error is None
-
-
-def test_operation_result_serialization():
-    result = OperationResult(
-        ok=False,
-        updated=False,
-        summary="",
-        changed_files=[],
         warning=None,
-        error="Operation timed out after 120s",
     )
-    data = result.model_dump()
-    assert data["ok"] is False
-    assert data["updated"] is False
-    assert data["summary"] == ""
-    assert data["changed_files"] == []
-    assert data["warning"] is None
-    assert data["error"] == "Operation timed out after 120s"
 
+    dumped = result.model_dump()
 
-def test_operation_result_deserialization():
-    data = {
+    assert dumped == {
         "ok": True,
         "updated": True,
-        "summary": "Done",
-        "changed_files": ["a.md", "b.md"],
-        "warning": "Minor issue",
+        "summary": "updated",
+        "changed_files": ["note.md"],
         "error": None,
+        "warning": None,
     }
-    result = OperationResult(**data)
-    assert result.ok is True
-    assert result.updated is True
-    assert result.summary == "Done"
-    assert result.changed_files == ["a.md", "b.md"]
-    assert result.warning == "Minor issue"
-    assert result.error is None
+
+
+def test_apply_request_validation_defaults() -> None:
+    request = ApplyRequest(instruction="do stuff")
+
+    assert request.instruction == "do stuff"
+    assert request.current_file is None
+
+
+def test_apply_request_with_current_file() -> None:
+    request = ApplyRequest(instruction="do stuff", current_file="Projects/Alpha.md")
+
+    assert request.instruction == "do stuff"
+    assert request.current_file == "Projects/Alpha.md"
+
+
+def test_apply_request_missing_instruction_defaults_to_none() -> None:
+    request = ApplyRequest()
+
+    assert request.instruction is None
+    assert request.current_file is None
+    assert request.interface_id is None
+
+
+def test_apply_request_trims_current_file() -> None:
+    request = ApplyRequest(instruction="do stuff", current_file="  Projects/Alpha.md  ")
+
+    assert request.current_file == "Projects/Alpha.md"
+
+
+def test_apply_request_with_interface_id() -> None:
+    request = ApplyRequest(instruction="do stuff", interface_id=" command ")
+
+    assert request.interface_id == "command"
+
+
+@pytest.mark.parametrize(
+    "current_file",
+    [
+        "",
+        "   ",
+        "/Projects/Alpha.md",
+        "../Projects/Alpha.md",
+        "Projects/../Alpha.md",
+        "https://example.com/Projects/Alpha.md",
+        "Projects\\Alpha.md",
+    ],
+)
+def test_apply_request_rejects_invalid_current_file(current_file: str) -> None:
+    with pytest.raises(ValidationError):
+        ApplyRequest(instruction="do stuff", current_file=current_file)
+
+
+@pytest.mark.parametrize("interface_id", ["", "   "])
+def test_apply_request_rejects_invalid_interface_id(interface_id: str) -> None:
+    with pytest.raises(ValidationError):
+        ApplyRequest(instruction="do stuff", interface_id=interface_id)
+
+
+def test_apply_request_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        ApplyRequest(instruction="do stuff", current_url_path="/note")

@@ -1,158 +1,279 @@
+import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
+from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError, VaultError
 
-from obsidian_agent.locks import FileLockManager
-from obsidian_agent.tools import ToolRuntime, get_tool_definitions
-from obsidian_agent.vcs import JujutsuHistory
+from obsidian_agent.tools import (
+    VaultDeps,
+    delete_file,
+    delete_frontmatter_field,
+    get_frontmatter,
+    list_files,
+    read_block,
+    read_file,
+    read_heading,
+    search_files,
+    set_frontmatter,
+    update_frontmatter,
+    write_block,
+    write_file,
+    write_heading,
+)
+from tests.support.vault_fs import VaultWorkspace
 
-
-class FakeSettings:
-    def __init__(self, vault_dir: Path):
-        self.vault_dir = vault_dir
-        self.max_search_results = 12
+pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def vault_dir(tmp_path: Path) -> Path:
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    return vault
+def tools_workspace(vault_workspace_factory) -> VaultWorkspace:
+    return vault_workspace_factory("tools")
 
 
 @pytest.fixture
-def tool_runtime(vault_dir: Path):
-    settings = FakeSettings(vault_dir)
-    lock_manager = FileLockManager()
-    jj = MagicMock(spec=JujutsuHistory)
-    return ToolRuntime(settings, lock_manager, jj)
+def vault(tools_workspace: VaultWorkspace) -> Vault:
+    return Vault(str(tools_workspace.work_dir))
 
 
-@pytest.mark.asyncio
-async def test_read_file_happy_path(tool_runtime: ToolRuntime, vault_dir: Path):
-    (vault_dir / "note.md").write_text("hello world", encoding="utf-8")
-    content = await tool_runtime.read_file("note.md")
-    assert content == "hello world"
+@pytest.fixture
+def deps(vault: Vault) -> VaultDeps:
+    return VaultDeps(vault=vault)
 
 
-@pytest.mark.asyncio
-async def test_write_file_happy_path(tool_runtime: ToolRuntime, vault_dir: Path):
-    result = await tool_runtime.write_file("new.md", "content")
-    assert "Wrote new.md" in result
-    assert (vault_dir / "new.md").read_text(encoding="utf-8") == "content"
-    assert tool_runtime.changed_files == ["new.md"]
+def make_ctx(deps: VaultDeps) -> SimpleNamespace:
+    return SimpleNamespace(deps=deps)
 
 
-@pytest.mark.asyncio
-async def test_write_file_tracks_changed_files(tool_runtime: ToolRuntime, vault_dir: Path):
-    await tool_runtime.write_file("a.md", "a")
-    await tool_runtime.write_file("b.md", "b")
-    assert sorted(tool_runtime.changed_files) == ["a.md", "b.md"]
+async def test_read_file_returns_content(deps: VaultDeps) -> None:
+    result = await read_file(make_ctx(deps), "note.md")
+
+    assert "Content here." in result
 
 
-@pytest.mark.asyncio
-async def test_write_file_rejects_path_traversal(tool_runtime: ToolRuntime):
-    with pytest.raises(ValueError, match="Path traversal"):
-        await tool_runtime.write_file("../escape.md", "bad")
+async def test_write_file_writes_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await write_file(make_ctx(deps), "new.md", "hello")
+
+    assert result == "Successfully wrote new.md"
+    assert vault.read_file("new.md") == "hello"
+    assert "new.md" in deps.changed_files
 
 
-@pytest.mark.asyncio
-async def test_list_files(tool_runtime: ToolRuntime, vault_dir: Path):
-    (vault_dir / "a.md").write_text("a", encoding="utf-8")
-    (vault_dir / "b.md").write_text("b", encoding="utf-8")
-    files = await tool_runtime.list_files()
-    assert files == ["a.md", "b.md"]
+async def test_delete_file_deletes_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await delete_file(make_ctx(deps), "note.md")
+
+    assert result == "Deleted note.md"
+    assert not (Path(vault.root) / "note.md").exists()
+    assert "note.md" in deps.changed_files
 
 
-@pytest.mark.asyncio
-async def test_search_files(tool_runtime: ToolRuntime, vault_dir: Path):
-    (vault_dir / "note.md").write_text("hello world\nsecond line", encoding="utf-8")
-    results = await tool_runtime.search_files("hello")
-    assert len(results) == 1
-    assert results[0]["path"] == "note.md"
-    assert "hello world" in results[0]["snippet"]
+async def test_list_files_returns_formatted_list(deps: VaultDeps) -> None:
+    result = await list_files(make_ctx(deps), "*.md")
+
+    assert result.startswith("Found")
+    assert "note.md" in result
 
 
-@pytest.mark.asyncio
-async def test_search_files_empty_query(tool_runtime: ToolRuntime):
-    results = await tool_runtime.search_files("")
-    assert results == []
+async def test_list_files_no_matches(deps: VaultDeps) -> None:
+    result = await list_files(make_ctx(deps), "*.xyz")
+
+    assert result == "No files found."
 
 
-@pytest.mark.asyncio
-async def test_search_files_respects_limit(tool_runtime: ToolRuntime, vault_dir: Path):
-    for i in range(20):
-        (vault_dir / f"file_{i}.md").write_text("match here", encoding="utf-8")
-    results = await tool_runtime.search_files("match")
-    assert len(results) == 12
+async def test_search_files_returns_results(deps: VaultDeps) -> None:
+    result = await search_files(make_ctx(deps), "Content")
+
+    assert "Found" in result
+    assert "note.md" in result
 
 
-@pytest.mark.asyncio
-async def test_fetch_url_success(tool_runtime: ToolRuntime):
-    mock_response = MagicMock()
-    mock_response.text = "fetched content"
-    mock_response.raise_for_status = MagicMock()
+async def test_search_files_no_matches(deps: VaultDeps) -> None:
+    result = await search_files(make_ctx(deps), "nonexistent_term_xyz")
 
-    with patch("obsidian_agent.tools.httpx.AsyncClient") as mock_client:
-        mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
-        result = await tool_runtime.fetch_url("http://example.com")
-        assert result == "fetched content"
+    assert result == "No matches found."
 
 
-@pytest.mark.asyncio
-async def test_fetch_url_failure(tool_runtime: ToolRuntime):
-    with patch("obsidian_agent.tools.httpx.AsyncClient") as mock_client:
-        mock_client.return_value.__aenter__.return_value.get.side_effect = Exception("connection error")
-        result = await tool_runtime.fetch_url("http://bad")
-        assert "Failed to fetch URL" in result
+async def test_get_frontmatter_returns_json(deps: VaultDeps) -> None:
+    result = await get_frontmatter(make_ctx(deps), "note.md")
+
+    parsed = json.loads(result)
+    assert parsed["title"] == "Test"
 
 
-@pytest.mark.asyncio
-async def test_undo_last_change_delegates_to_vcs(tool_runtime: ToolRuntime):
-    tool_runtime._jj.undo = AsyncMock(return_value="undone")
-    result = await tool_runtime.undo_last_change()
-    assert result == "undone"
-    tool_runtime._jj.undo.assert_called_once()
+async def test_get_frontmatter_no_frontmatter(deps: VaultDeps) -> None:
+    result = await get_frontmatter(make_ctx(deps), "plain.md")
+
+    assert result == "No frontmatter found."
 
 
-@pytest.mark.asyncio
-async def test_get_file_history_delegates_to_vcs(tool_runtime: ToolRuntime, vault_dir: Path):
-    (vault_dir / "note.md").write_text("content", encoding="utf-8")
-    tool_runtime._jj.log_for_file = AsyncMock(return_value=["commit 1", "commit 2"])
-    result = await tool_runtime.get_file_history("note.md", limit=5)
-    assert result == ["commit 1", "commit 2"]
-    tool_runtime._jj.log_for_file.assert_called_once_with("note.md", 5)
+async def test_update_frontmatter_updates_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await update_frontmatter(make_ctx(deps), "note.md", {"status": "done"})
+
+    assert result == "Updated frontmatter for note.md"
+    frontmatter = vault.get_frontmatter("note.md")
+    assert frontmatter is not None
+    assert frontmatter["status"] == "done"
+    assert "note.md" in deps.changed_files
 
 
-@pytest.mark.asyncio
-async def test_call_tool_unknown(tool_runtime: ToolRuntime):
-    result = await tool_runtime.call_tool("unknown_tool", {})
-    assert "Unknown tool" in result
+async def test_set_frontmatter_replaces_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await set_frontmatter(make_ctx(deps), "note.md", {"title": "Replaced", "status": "new"})
+
+    assert result == "Set frontmatter for note.md"
+    frontmatter = vault.get_frontmatter("note.md")
+    assert frontmatter is not None
+    assert frontmatter["title"] == "Replaced"
+    assert frontmatter["status"] == "new"
+    assert "note.md" in deps.changed_files
 
 
-@pytest.mark.asyncio
-async def test_call_tool_failure(tool_runtime: ToolRuntime):
-    tool_runtime.read_file = AsyncMock(side_effect=ValueError("boom"))
-    result = await tool_runtime.call_tool("read_file", {"path": "note.md"})
-    assert "failed" in result
+async def test_delete_frontmatter_field_updates_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await delete_frontmatter_field(make_ctx(deps), "note.md", "title")
+
+    assert result == "Deleted frontmatter field 'title' from note.md"
+    frontmatter = vault.get_frontmatter("note.md")
+    assert frontmatter is not None
+    assert "title" not in frontmatter
+    assert "note.md" in deps.changed_files
 
 
-@pytest.mark.asyncio
-async def test_reset_clears_changed_files(tool_runtime: ToolRuntime, vault_dir: Path):
-    await tool_runtime.write_file("a.md", "a")
-    assert tool_runtime.changed_files == ["a.md"]
-    tool_runtime.reset()
-    assert tool_runtime.changed_files == []
+async def test_read_heading_returns_content(deps: VaultDeps) -> None:
+    result = await read_heading(make_ctx(deps), "note.md", "# Hello")
+
+    assert "Content here." in result
 
 
-def test_get_tool_definitions():
-    definitions = get_tool_definitions()
-    names = [d["function"]["name"] for d in definitions]
-    assert "read_file" in names
-    assert "write_file" in names
-    assert "list_files" in names
-    assert "search_files" in names
-    assert "fetch_url" in names
-    assert "undo_last_change" in names
-    assert "get_file_history" in names
+async def test_read_heading_not_found(deps: VaultDeps) -> None:
+    result = await read_heading(make_ctx(deps), "note.md", "# Nonexistent")
+
+    assert "not found" in result
+
+
+async def test_write_heading_writes_and_tracks(vault: Vault, deps: VaultDeps) -> None:
+    result = await write_heading(make_ctx(deps), "note.md", "# Hello", "Updated heading text")
+
+    assert result == "Updated heading '# Hello' in note.md"
+    content = vault.read_heading("note.md", "# Hello")
+    assert content is not None
+    assert "Updated heading text" in content
+    assert "note.md" in deps.changed_files
+
+
+async def test_read_write_block(deps: VaultDeps) -> None:
+    read_result = await read_block(make_ctx(deps), "block.md", "^my-block")
+    assert "Paragraph with block ref" in read_result
+
+    write_result = await write_block(
+        make_ctx(deps),
+        "block.md",
+        "^my-block",
+        "Replacement content ^my-block",
+    )
+    assert write_result == "Updated block '^my-block' in block.md"
+    assert "block.md" in deps.changed_files
+
+    new_block = await read_block(make_ctx(deps), "block.md", "^my-block")
+    assert "Replacement content" in new_block
+
+
+async def test_path_error_returns_error_string(deps: VaultDeps) -> None:
+    result = await read_file(make_ctx(deps), "../../etc/passwd")
+
+    assert result.startswith("Error:")
+
+
+async def test_path_error_does_not_modify_outside_workspace(
+    tools_workspace: VaultWorkspace,
+    deps: VaultDeps,
+) -> None:
+    sentinel = tools_workspace.workspace_root / "outside.txt"
+    sentinel.write_text("keep-me")
+
+    result = await write_file(make_ctx(deps), "../../outside.txt", "mutated")
+
+    assert result.startswith("Error:")
+    assert sentinel.read_text() == "keep-me"
+
+
+async def test_busy_error_reraises() -> None:
+    class BusyVault:
+        def read_file(self, path: str) -> str:
+            raise BusyError("busy")
+
+    deps = VaultDeps(vault=BusyVault())  # type: ignore[arg-type]
+
+    with pytest.raises(BusyError):
+        await read_file(make_ctx(deps), "note.md")
+
+
+async def test_read_block_not_found_returns_message(deps: VaultDeps) -> None:
+    result = await read_block(make_ctx(deps), "block.md", "^missing-block")
+
+    assert "not found" in result
+
+
+async def test_write_heading_creates_missing_heading(vault: Vault, deps: VaultDeps) -> None:
+    result = await write_heading(make_ctx(deps), "plain.md", "## Added", "Fresh content")
+
+    assert result == "Updated heading '## Added' in plain.md"
+    content = vault.read_file("plain.md")
+    assert "## Added" in content
+    assert "Fresh content" in content
+    assert "plain.md" in deps.changed_files
+
+
+async def test_changed_files_deduplicates_multiple_writes(deps: VaultDeps) -> None:
+    first = await write_file(make_ctx(deps), "note.md", "one")
+    second = await write_file(make_ctx(deps), "note.md", "two")
+
+    assert first == "Successfully wrote note.md"
+    assert second == "Successfully wrote note.md"
+    assert sorted(deps.changed_files) == ["note.md"]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "tool_fn", "args"),
+    [
+        ("write_file", write_file, ("note.md", "x")),
+        ("delete_file", delete_file, ("note.md",)),
+        ("list_files", list_files, ("*.md",)),
+        ("search_files", search_files, ("query",)),
+        ("get_frontmatter", get_frontmatter, ("note.md",)),
+        ("set_frontmatter", set_frontmatter, ("note.md", {"k": "v"})),
+        ("update_frontmatter", update_frontmatter, ("note.md", {"k": "v"})),
+        ("delete_frontmatter_field", delete_frontmatter_field, ("note.md", "k")),
+        ("read_heading", read_heading, ("note.md", "# H")),
+        ("write_heading", write_heading, ("note.md", "# H", "x")),
+        ("read_block", read_block, ("note.md", "^b")),
+        ("write_block", write_block, ("note.md", "^b", "x")),
+    ],
+)
+async def test_tools_return_error_string_on_vault_error(method_name: str, tool_fn, args) -> None:
+    class ErrorVault:
+        def __getattr__(self, name: str):
+            if name != method_name:
+                raise AttributeError(name)
+
+            def raise_error(*_args, **_kwargs):
+                raise VaultError("boom")
+
+            return raise_error
+
+    deps = VaultDeps(vault=ErrorVault())  # type: ignore[arg-type]
+
+    result = await tool_fn(make_ctx(deps), *args)
+
+    assert result.startswith("Error:")
+
+
+async def test_tools_propagate_unexpected_runtime_errors() -> None:
+    class ErrorVault:
+        def read_file(self, path: str) -> str:
+            _ = path
+            raise RuntimeError("boom")
+
+    deps = VaultDeps(vault=ErrorVault())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await read_file(make_ctx(deps), "note.md")

@@ -199,6 +199,24 @@ async def test_undo_success(agent: Agent, vault: Vault, monkeypatch: pytest.Monk
     assert result.summary == "Last change undone."
 
 
+async def test_undo_uses_undo_last_change_api(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class UndoResult:
+        warning = None
+
+    def undo_last_change() -> UndoResult:
+        calls.append("undo_last_change")
+        return UndoResult()
+
+    monkeypatch.setattr(vault, "undo_last_change", undo_last_change)
+
+    result = await agent.undo()
+
+    assert result.ok is True
+    assert calls == ["undo_last_change"]
+
+
 async def test_undo_surfaces_warning_from_ops(
     agent: Agent,
     vault: Vault,

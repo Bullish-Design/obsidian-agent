@@ -250,6 +250,26 @@ async def write_block(ctx: RunContext[VaultDeps], path: str, block_id: str, cont
         return f"Error: {exc}"
 
 
+async def create_from_template(ctx: RunContext[VaultDeps], template_id: str, fields: dict[str, str]) -> str:
+    """Create a new page from a deterministic vault template."""
+    if not _tool_allowed(ctx, "create_from_template"):
+        return "Error: create_from_template is not allowed in this interface/scope"
+
+    creator = getattr(ctx.deps.vault, "create_from_template", None)
+    if creator is None:
+        return "Error: create_from_template unavailable"
+
+    try:
+        result = creator(template_id, fields)
+        path = getattr(result, "path")
+        ctx.deps.changed_files.add(path)
+        return f"Created {path}"
+    except BusyError:
+        raise
+    except (VaultError, FileExistsError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+
+
 def register_tools(agent: Any) -> None:
     """Register all vault tools on a pydantic-ai Agent."""
     agent.tool(read_file)
@@ -265,3 +285,4 @@ def register_tools(agent: Any) -> None:
     agent.tool(write_heading)
     agent.tool(read_block)
     agent.tool(write_block)
+    agent.tool(create_from_template)

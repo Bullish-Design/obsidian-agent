@@ -17,7 +17,7 @@ class ForgeWebProfile:
 
     def allowed_tool_names(self, scope: EditScope | None) -> set[str]:
         if scope is None:
-            return READ_ONLY | {"write_file", "write_heading", "write_block", "update_frontmatter"}
+            return READ_ONLY | {"write_file", "write_heading", "write_block", "update_frontmatter", "create_from_template"}
 
         if isinstance(scope, BlockScope):
             return READ_ONLY | {"write_block"}
@@ -28,7 +28,7 @@ class ForgeWebProfile:
         if isinstance(scope, SelectionScope):
             return READ_ONLY | {"write_heading", "write_block"}
 
-        return READ_ONLY | {"write_file", "write_heading", "write_block", "update_frontmatter"}
+        return READ_ONLY | {"write_file", "write_heading", "write_block", "update_frontmatter", "create_from_template"}
 
     def prompt_suffix(self, scope: EditScope | None, intent: str | None) -> str:
         lines = ["You are operating in Forge web interface mode."]

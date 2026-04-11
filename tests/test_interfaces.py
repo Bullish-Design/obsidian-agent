@@ -9,6 +9,7 @@ def test_resolve_command_interface() -> None:
 
     assert profile.id == "command"
     assert "write_file" in profile.allowed_tool_names(None)
+    assert "create_from_template" in profile.allowed_tool_names(None)
 
 
 def test_resolve_forge_web_interface() -> None:
@@ -29,6 +30,7 @@ def test_forge_web_block_scope_locks_to_block_tool() -> None:
     assert "write_block" in allowed
     assert "write_file" not in allowed
     assert "write_heading" not in allowed
+    assert "create_from_template" not in allowed
 
 
 def test_forge_web_heading_scope_locks_to_heading_tools() -> None:
@@ -56,6 +58,7 @@ def test_forge_web_file_scope_allows_file_writes() -> None:
     allowed = profile.allowed_tool_names(FileScope(path="Projects/Alpha.md"))
 
     assert "write_file" in allowed
+    assert "create_from_template" in allowed
 
 
 def test_forge_web_prompt_suffix_contains_scope_and_intent() -> None:

@@ -22,6 +22,7 @@ class CommandProfile:
             "write_heading",
             "read_block",
             "write_block",
+            "create_from_template",
         }
 
     def prompt_suffix(self, scope: EditScope | None, intent: str | None) -> str:

@@ -8,6 +8,7 @@ from obsidian_ops.errors import BusyError, VaultError
 
 from obsidian_agent.tools import (
     VaultDeps,
+    create_from_template,
     delete_file,
     delete_frontmatter_field,
     get_frontmatter,
@@ -293,3 +294,35 @@ async def test_write_heading_rejected_when_path_outside_allowed_scope(vault: Vau
     result = await write_heading(make_ctx(deps), "plain.md", "## Added", "x")
 
     assert result == "Error: write target is outside allowed scope"
+
+
+async def test_create_from_template_rejected_when_not_allowed(vault: Vault) -> None:
+    deps = VaultDeps(vault=vault, allowed_tool_names={"read_file"})
+
+    result = await create_from_template(make_ctx(deps), "daily", {"title": "Test"})
+
+    assert result == "Error: create_from_template is not allowed in this interface/scope"
+
+
+async def test_create_from_template_returns_unavailable_when_missing_method(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vault, "create_from_template", None, raising=False)
+    deps = VaultDeps(vault=vault, allowed_tool_names={"create_from_template"})
+
+    result = await create_from_template(make_ctx(deps), "daily", {"title": "Test"})
+
+    assert result == "Error: create_from_template unavailable"
+
+
+async def test_create_from_template_success_tracks_changed_file() -> None:
+    class TemplateVault:
+        def create_from_template(self, template_id: str, fields: dict[str, str]):
+            assert template_id == "daily"
+            assert fields == {"title": "My Day"}
+            return SimpleNamespace(path="Daily/my-day.md")
+
+    deps = VaultDeps(vault=TemplateVault(), allowed_tool_names={"create_from_template"})  # type: ignore[arg-type]
+
+    result = await create_from_template(make_ctx(deps), "daily", {"title": "My Day"})
+
+    assert result == "Created Daily/my-day.md"
+    assert "Daily/my-day.md" in deps.changed_files

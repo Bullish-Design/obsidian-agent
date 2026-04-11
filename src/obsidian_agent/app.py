@@ -2,27 +2,16 @@ from contextlib import asynccontextmanager
 import logging
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from obsidian_ops import Vault
-from obsidian_ops.errors import BusyError as VaultBusyError
 
-from .agent import Agent, BusyError
+from .agent import Agent
 from .config import AgentConfig
-from .models import ApplyRequest, HealthResponse, OperationResult, RunResult
+from .models import ApplyRequest, HealthResponse, OperationResult
+from .routes import agent_router, vault_router
+from .routes.agent_routes import handle_apply, handle_undo
 
 logger = logging.getLogger(__name__)
-DEFAULT_INTERFACE_ID = "command"
-
-
-def to_operation_result(result: RunResult) -> OperationResult:
-    return OperationResult(
-        ok=result.ok,
-        updated=result.updated,
-        summary=result.summary,
-        changed_files=result.changed_files,
-        error=result.error,
-        warning=result.warning,
-    )
 
 
 def create_app(agent: Agent | None = None) -> FastAPI:
@@ -30,54 +19,32 @@ def create_app(agent: Agent | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if agent is not None:
             app.state.agent = agent
+            app.state.vault = agent.vault
+            app.state.config = agent.config
             yield
             return
 
         config = AgentConfig()
         vault = Vault(str(config.vault_dir), jj_bin=config.jj_bin, jj_timeout=config.jj_timeout)
         app.state.agent = Agent(config, vault)
+        app.state.vault = vault
+        app.state.config = config
         yield
 
     app = FastAPI(lifespan=lifespan)
 
-    async def command_interface_handler(request: ApplyRequest) -> OperationResult:
-        active_agent: Agent = app.state.agent
-        if request.instruction is None or not request.instruction.strip():
-            return OperationResult(ok=False, updated=False, summary="", error="instruction is required")
-        result = await active_agent.run(request.instruction, request.current_file)
-        return to_operation_result(result)
+    app.include_router(agent_router)
+    app.include_router(vault_router)
 
-    interface_handlers = {DEFAULT_INTERFACE_ID: command_interface_handler}
+    @app.post("/api/apply", response_model=OperationResult, deprecated=True)
+    async def legacy_apply(request: Request, payload: ApplyRequest) -> OperationResult:
+        logger.warning("api.legacy_apply_used", extra={"route": "/api/apply"})
+        return await handle_apply(request, payload)
 
-    @app.post("/api/apply", response_model=OperationResult)
-    async def apply_instruction(request: ApplyRequest) -> OperationResult:
-        interface_id = request.interface_id or DEFAULT_INTERFACE_ID
-        handler = interface_handlers.get(interface_id)
-        if handler is None:
-            raise HTTPException(status_code=400, detail=f"unsupported interface_id: {interface_id}")
-
-        try:
-            return await handler(request)
-        except (BusyError, VaultBusyError) as exc:
-            logger.warning(
-                "api.apply_busy_rejected",
-                extra={
-                    "error": str(exc),
-                    "has_current_file": bool(request.current_file),
-                    "interface_id": interface_id,
-                },
-            )
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.post("/api/undo", response_model=OperationResult)
-    async def undo() -> OperationResult:
-        active_agent: Agent = app.state.agent
-        try:
-            result = await active_agent.undo()
-            return to_operation_result(result)
-        except (BusyError, VaultBusyError) as exc:
-            logger.warning("api.undo_busy_rejected", extra={"error": str(exc)})
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    @app.post("/api/undo", response_model=OperationResult, deprecated=True)
+    async def legacy_undo(request: Request) -> OperationResult:
+        logger.warning("api.legacy_undo_used", extra={"route": "/api/undo"})
+        return await handle_undo(request)
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

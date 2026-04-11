@@ -41,6 +41,17 @@ def _file_modified_at(vault: Vault, path: str) -> datetime:
     return datetime.fromtimestamp(file_stat.st_mtime, tz=UTC)
 
 
+def _enforce_rate_limit(request: Request, route_key: str) -> None:
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if limiter is None:
+        return
+
+    client = request.client.host if request.client is not None else "unknown"
+    key = f"{client}:{route_key}"
+    if not limiter.allow(key):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+
 @vault_router.get("/files", response_model=VaultFileReadResponse)
 async def get_file(
     request: Request,
@@ -76,6 +87,8 @@ async def get_file(
 
 @vault_router.put("/files", response_model=VaultFileWriteResponse)
 async def put_file(request: Request, payload: VaultFileWriteRequest) -> VaultFileWriteResponse:
+    _enforce_rate_limit(request, "vault.put_file")
+
     vault: Vault = request.app.state.vault
     config = request.app.state.config
 
@@ -130,6 +143,8 @@ async def put_file(request: Request, payload: VaultFileWriteRequest) -> VaultFil
 
 @vault_router.post("/undo", response_model=VaultUndoResponse)
 async def vault_undo(request: Request) -> VaultUndoResponse:
+    _enforce_rate_limit(request, "vault.undo")
+
     vault: Vault = request.app.state.vault
     try:
         if hasattr(vault, "undo_last_change"):
@@ -188,6 +203,8 @@ async def get_file_structure(
 
 @vault_router.post("/files/anchors", response_model=EnsureAnchorResponse)
 async def ensure_file_anchor(request: Request, payload: EnsureAnchorRequest) -> EnsureAnchorResponse:
+    _enforce_rate_limit(request, "vault.ensure_file_anchor")
+
     if payload.line_end < payload.line_start:
         raise HTTPException(status_code=400, detail="line_end must be >= line_start")
 
@@ -261,6 +278,8 @@ async def list_page_templates(request: Request) -> TemplateListResponse:
 
 @vault_router.post("/pages", response_model=CreatePageResponse)
 async def create_page_from_template(request: Request, payload: CreatePageRequest) -> CreatePageResponse:
+    _enforce_rate_limit(request, "vault.create_page_from_template")
+
     vault: Vault = request.app.state.vault
     config = request.app.state.config
     create_from_template = getattr(vault, "create_from_template", None)

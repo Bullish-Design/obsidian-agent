@@ -23,6 +23,8 @@ def test_valid_config_from_kwargs(config_workspace: VaultWorkspace) -> None:
     assert cfg.jj_timeout == 120
     assert cfg.site_base_url == "http://127.0.0.1:8080"
     assert cfg.flat_urls is False
+    assert cfg.deterministic_rate_limit == 120
+    assert cfg.deterministic_rate_window_seconds == 60
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8081
 
@@ -38,6 +40,8 @@ def test_valid_config_from_env_vars(monkeypatch: pytest.MonkeyPatch, config_work
     monkeypatch.setenv("AGENT_JJ_TIMEOUT", "30")
     monkeypatch.setenv("AGENT_SITE_BASE_URL", "https://example.com/notes/")
     monkeypatch.setenv("AGENT_FLAT_URLS", "true")
+    monkeypatch.setenv("AGENT_DETERMINISTIC_RATE_LIMIT", "30")
+    monkeypatch.setenv("AGENT_DETERMINISTIC_RATE_WINDOW_SECONDS", "10")
     monkeypatch.setenv("AGENT_HOST", "0.0.0.0")
     monkeypatch.setenv("AGENT_PORT", "9090")
 
@@ -53,6 +57,8 @@ def test_valid_config_from_env_vars(monkeypatch: pytest.MonkeyPatch, config_work
     assert cfg.jj_timeout == 30
     assert cfg.site_base_url == "https://example.com/notes"
     assert cfg.flat_urls is True
+    assert cfg.deterministic_rate_limit == 30
+    assert cfg.deterministic_rate_window_seconds == 10
     assert cfg.host == "0.0.0.0"
     assert cfg.port == 9090
 
@@ -103,6 +109,8 @@ def test_default_values(config_workspace: VaultWorkspace) -> None:
     assert cfg.jj_timeout == 120
     assert cfg.site_base_url == "http://127.0.0.1:8080"
     assert cfg.flat_urls is False
+    assert cfg.deterministic_rate_limit == 120
+    assert cfg.deterministic_rate_window_seconds == 60
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8081
 
@@ -154,6 +162,8 @@ def test_invalid_site_base_url(config_workspace: VaultWorkspace, url: str) -> No
         ("jj_timeout", 0),
         ("port", 0),
         ("port", 70000),
+        ("deterministic_rate_limit", -1),
+        ("deterministic_rate_window_seconds", 0),
     ],
 )
 def test_numeric_bounds_validation(config_workspace: VaultWorkspace, field_name: str, value: int) -> None:

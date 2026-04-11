@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+import time
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
@@ -8,6 +9,7 @@ from obsidian_ops import Vault
 from .agent import Agent
 from .config import AgentConfig
 from .models import ApplyRequest, HealthResponse, OperationResult
+from .rate_limit import RouteRateLimiter
 from .routes import agent_router, vault_router
 from .routes.agent_routes import handle_apply, handle_undo
 
@@ -21,6 +23,10 @@ def create_app(agent: Agent | None = None) -> FastAPI:
             app.state.agent = agent
             app.state.vault = agent.vault
             app.state.config = agent.config
+            app.state.rate_limiter = RouteRateLimiter(
+                max_events=agent.config.deterministic_rate_limit,
+                window_seconds=agent.config.deterministic_rate_window_seconds,
+            )
             yield
             return
 
@@ -29,9 +35,29 @@ def create_app(agent: Agent | None = None) -> FastAPI:
         app.state.agent = Agent(config, vault)
         app.state.vault = vault
         app.state.config = config
+        app.state.rate_limiter = RouteRateLimiter(
+            max_events=config.deterministic_rate_limit,
+            window_seconds=config.deterministic_rate_window_seconds,
+        )
         yield
 
     app = FastAPI(lifespan=lifespan)
+
+    @app.middleware("http")
+    async def request_logging(request: Request, call_next):
+        started = time.monotonic()
+        response = await call_next(request)
+        duration_ms = round((time.monotonic() - started) * 1000, 2)
+        logger.info(
+            "http.request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return response
 
     app.include_router(agent_router)
     app.include_router(vault_router)

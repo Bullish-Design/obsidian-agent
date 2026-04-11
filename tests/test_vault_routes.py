@@ -10,6 +10,7 @@ from obsidian_ops.errors import BusyError as VaultBusyError
 from obsidian_agent.agent import Agent
 from obsidian_agent.app import create_app
 from obsidian_agent.config import AgentConfig
+from obsidian_agent.rate_limit import RouteRateLimiter
 from tests.support.vault_fs import VaultWorkspace
 
 
@@ -366,3 +367,14 @@ def test_create_page_from_template_returns_501_when_unavailable(
 
     assert response.status_code == 501
     assert "create_from_template" in response.json()["detail"]
+
+
+def test_write_routes_return_429_when_rate_limited(client: TestClient) -> None:
+    client.app.state.rate_limiter = RouteRateLimiter(max_events=1, window_seconds=3600)
+
+    first = client.put("/api/vault/files", json={"path": "note.md", "content": "# Test\none\n"})
+    second = client.put("/api/vault/files", json={"path": "note.md", "content": "# Test\ntwo\n"})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == "rate limit exceeded"

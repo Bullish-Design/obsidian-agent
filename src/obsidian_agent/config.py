@@ -18,6 +18,8 @@ class AgentConfig(BaseSettings):
     jj_timeout: int = Field(default=120, gt=0)
     site_base_url: str = "http://127.0.0.1:8080"
     flat_urls: bool = False
+    deterministic_rate_limit: int = Field(default=120, ge=0)
+    deterministic_rate_window_seconds: int = Field(default=60, gt=0)
     host: str = "127.0.0.1"
     port: int = Field(default=8081, ge=1, le=65535)
 

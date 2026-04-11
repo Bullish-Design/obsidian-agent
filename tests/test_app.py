@@ -240,6 +240,7 @@ def test_post_apply_defaults_interface_to_command(client: TestClient, monkeypatc
                     "read_file",
                     "read_heading",
                     "search_files",
+                    "create_from_template",
                     "set_frontmatter",
                     "update_frontmatter",
                     "write_block",

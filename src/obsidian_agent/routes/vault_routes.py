@@ -9,7 +9,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
 
-from ..models import VaultFileReadResponse, VaultFileWriteRequest, VaultFileWriteResponse, VaultUndoResponse
+from ..models import (
+    EnsureAnchorRequest,
+    EnsureAnchorResponse,
+    VaultFileReadResponse,
+    VaultFileWriteRequest,
+    VaultFileWriteResponse,
+    VaultStructureResponse,
+    VaultUndoResponse,
+)
 from ..web_paths import resolve_path_or_url, vault_path_to_url
 
 logger = logging.getLogger(__name__)
@@ -130,3 +138,79 @@ async def vault_undo(request: Request) -> VaultUndoResponse:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"undo failed: {exc}") from exc
+
+
+@vault_router.get("/files/structure", response_model=VaultStructureResponse)
+async def get_file_structure(
+    request: Request,
+    path: str | None = Query(default=None),
+    url: str | None = Query(default=None),
+) -> VaultStructureResponse:
+    vault: Vault = request.app.state.vault
+    config = request.app.state.config
+
+    try:
+        resolved_path = resolve_path_or_url(
+            path=path,
+            url=url,
+            site_base_url=config.site_base_url,
+            flat_urls=config.flat_urls,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    list_structure = getattr(vault, "list_structure", None)
+    if list_structure is None:
+        raise HTTPException(status_code=501, detail="list_structure not available in installed obsidian-ops")
+
+    try:
+        structure = list_structure(resolved_path)
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    headings = [heading.__dict__ if hasattr(heading, "__dict__") else dict(heading) for heading in structure.headings]
+    blocks = [block.__dict__ if hasattr(block, "__dict__") else dict(block) for block in structure.blocks]
+    return VaultStructureResponse(
+        path=resolved_path,
+        sha256=getattr(structure, "sha256", None),
+        headings=headings,
+        blocks=blocks,
+    )
+
+
+@vault_router.post("/files/anchors", response_model=EnsureAnchorResponse)
+async def ensure_file_anchor(request: Request, payload: EnsureAnchorRequest) -> EnsureAnchorResponse:
+    if payload.line_end < payload.line_start:
+        raise HTTPException(status_code=400, detail="line_end must be >= line_start")
+
+    vault: Vault = request.app.state.vault
+    config = request.app.state.config
+
+    try:
+        resolved_path = resolve_path_or_url(
+            path=payload.path,
+            url=payload.url,
+            site_base_url=config.site_base_url,
+            flat_urls=config.flat_urls,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    ensure_block_id = getattr(vault, "ensure_block_id", None)
+    if ensure_block_id is None:
+        raise HTTPException(status_code=501, detail="ensure_block_id not available in installed obsidian-ops")
+
+    try:
+        result = ensure_block_id(resolved_path, payload.line_start, payload.line_end)
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return EnsureAnchorResponse(
+        path=resolved_path,
+        block_id=getattr(result, "block_id"),
+        sha256=getattr(result, "sha256", None),
+    )

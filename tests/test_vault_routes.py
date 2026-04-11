@@ -1,4 +1,5 @@
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -156,3 +157,78 @@ def test_vault_undo_busy_409(client: TestClient, monkeypatch: pytest.MonkeyPatch
 
     assert response.status_code == 409
     assert response.json()["detail"] == "vault is busy elsewhere"
+
+
+def test_get_file_structure_returns_501_when_unavailable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client.app.state.vault, "list_structure", None, raising=False)
+
+    response = client.get("/api/vault/files/structure", params={"path": "note.md"})
+
+    assert response.status_code == 501
+    assert "list_structure" in response.json()["detail"]
+
+
+def test_get_file_structure_happy_path(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def list_structure(path: str):
+        assert path == "note.md"
+        return SimpleNamespace(
+            sha256="abcd1234",
+            headings=[SimpleNamespace(text="# Test", level=1, line_start=1, line_end=5)],
+            blocks=[SimpleNamespace(block_id="my-block", line_start=4, line_end=4)],
+        )
+
+    monkeypatch.setattr(client.app.state.vault, "list_structure", list_structure, raising=False)
+
+    response = client.get("/api/vault/files/structure", params={"path": "note.md"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["path"] == "note.md"
+    assert payload["sha256"] == "abcd1234"
+    assert payload["headings"][0]["text"] == "# Test"
+    assert payload["blocks"][0]["block_id"] == "my-block"
+
+
+def test_ensure_anchor_returns_501_when_unavailable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client.app.state.vault, "ensure_block_id", None, raising=False)
+
+    response = client.post(
+        "/api/vault/files/anchors",
+        json={"path": "note.md", "line_start": 2, "line_end": 3},
+    )
+
+    assert response.status_code == 501
+    assert "ensure_block_id" in response.json()["detail"]
+
+
+def test_ensure_anchor_happy_path(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def ensure_block_id(path: str, line_start: int, line_end: int):
+        assert path == "note.md"
+        assert line_start == 2
+        assert line_end == 3
+        return SimpleNamespace(block_id="anchored-1", sha256="ffff")
+
+    monkeypatch.setattr(client.app.state.vault, "ensure_block_id", ensure_block_id, raising=False)
+
+    response = client.post(
+        "/api/vault/files/anchors",
+        json={"path": "note.md", "line_start": 2, "line_end": 3},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["path"] == "note.md"
+    assert payload["block_id"] == "anchored-1"
+    assert payload["sha256"] == "ffff"
+
+
+def test_ensure_anchor_rejects_invalid_line_range(client: TestClient) -> None:
+    response = client.post(
+        "/api/vault/files/anchors",
+        json={"path": "note.md", "line_start": 4, "line_end": 3},
+    )
+
+    assert response.status_code == 400
+    assert "line_end must be >= line_start" in response.json()["detail"]

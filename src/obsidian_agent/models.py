@@ -121,3 +121,27 @@ class VaultUndoResponse(BaseModel):
     updated: bool = True
     summary: str = "Last change undone."
     warning: str | None = None
+
+
+class VaultStructureResponse(BaseModel):
+    ok: bool = True
+    path: str
+    sha256: str | None = None
+    headings: list[dict] = Field(default_factory=list)
+    blocks: list[dict] = Field(default_factory=list)
+
+
+class EnsureAnchorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None = None
+    url: str | None = None
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+
+
+class EnsureAnchorResponse(BaseModel):
+    ok: bool = True
+    path: str
+    block_id: str
+    sha256: str | None = None

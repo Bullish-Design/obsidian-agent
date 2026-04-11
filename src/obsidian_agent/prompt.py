@@ -12,9 +12,25 @@ Rules:
 - Only read and write files within the vault."""
 
 
-def build_system_prompt(current_file: str | None = None) -> str:
-    """Build the full system prompt, optionally including current file context."""
-    prompt = BASE_PROMPT
+def build_system_prompt(
+    current_file: str | None = None,
+    *,
+    interface_id: str = "command",
+    scope_kind: str | None = None,
+    intent: str | None = None,
+    profile_suffix: str | None = None,
+) -> str:
+    """Build the full system prompt, optionally including current file/interface context."""
+    lines: list[str] = [BASE_PROMPT]
     if current_file:
-        prompt += f"\n\nThe user is currently viewing: {current_file}"
-    return prompt
+        lines.append(f"The user is currently viewing: {current_file}")
+
+    lines.append(f"Interface: {interface_id}")
+    if scope_kind:
+        lines.append(f"Scope: {scope_kind}")
+    if intent:
+        lines.append(f"Intent: {intent}")
+    if profile_suffix:
+        lines.append(profile_suffix)
+
+    return "\n\n".join(lines)

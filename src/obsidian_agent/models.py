@@ -1,8 +1,11 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePosixPath
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .scope import EditScope
 
 
 @dataclass
@@ -21,6 +24,9 @@ class ApplyRequest(BaseModel):
     instruction: str | None = None
     current_file: str | None = None
     interface_id: str | None = None
+    scope: EditScope | None = None
+    intent: Literal["rewrite", "summarize", "insert_below", "annotate", "extract_tasks"] | None = None
+    allowed_write_scope: Literal["target_only", "target_plus_frontmatter", "unrestricted"] = "target_only"
 
     @field_validator("current_file")
     @classmethod
@@ -60,6 +66,13 @@ class ApplyRequest(BaseModel):
             msg = "interface_id must be a non-empty string when provided"
             raise ValueError(msg)
         return interface_id
+
+    @model_validator(mode="after")
+    def validate_scope_path_alignment(self) -> "ApplyRequest":
+        if self.scope is not None and self.current_file is not None and self.scope.path != self.current_file:
+            msg = "scope.path must match current_file when both are provided"
+            raise ValueError(msg)
+        return self
 
 
 class OperationResult(BaseModel):

@@ -6,12 +6,21 @@ from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError, VaultError
 from pydantic_ai import RunContext
 
+from .web_paths import normalize_vault_path
+
 
 @dataclass
 class VaultDeps:
     vault: Vault
     changed_files: set[str] = field(default_factory=set)
     current_file: str | None = None
+    interface_id: str = "command"
+    scope_kind: str | None = None
+    intent: str | None = None
+    allowed_write_scope: str = "unrestricted"
+    allowed_tool_names: set[str] | None = None
+    allowed_write_paths: set[str] | None = None
+    profile_prompt_suffix: str | None = None
 
 
 WRITE_TOOLS = {
@@ -23,6 +32,25 @@ WRITE_TOOLS = {
     "write_heading",
     "write_block",
 }
+
+
+def _tool_allowed(ctx: RunContext[VaultDeps], tool_name: str) -> bool:
+    allowed = ctx.deps.allowed_tool_names
+    return allowed is None or tool_name in allowed
+
+
+def _normalize_path_for_policy(path: str) -> str:
+    try:
+        return normalize_vault_path(path)
+    except ValueError:
+        return path
+
+
+def _path_allowed(ctx: RunContext[VaultDeps], path: str) -> bool:
+    allowed_paths = ctx.deps.allowed_write_paths
+    if allowed_paths is None:
+        return True
+    return _normalize_path_for_policy(path) in {_normalize_path_for_policy(p) for p in allowed_paths}
 
 
 async def read_file(ctx: RunContext[VaultDeps], path: str) -> str:
@@ -37,6 +65,11 @@ async def read_file(ctx: RunContext[VaultDeps], path: str) -> str:
 
 async def write_file(ctx: RunContext[VaultDeps], path: str, content: str) -> str:
     """Write content to a file in the vault. Creates or overwrites. Path is relative to vault root."""
+    if not _tool_allowed(ctx, "write_file"):
+        return "Error: write_file is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.write_file(path, content)
         ctx.deps.changed_files.add(path)
@@ -49,6 +82,11 @@ async def write_file(ctx: RunContext[VaultDeps], path: str, content: str) -> str
 
 async def delete_file(ctx: RunContext[VaultDeps], path: str) -> str:
     """Delete a file from the vault. Path is relative to vault root."""
+    if not _tool_allowed(ctx, "delete_file"):
+        return "Error: delete_file is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.delete_file(path)
         ctx.deps.changed_files.add(path)
@@ -103,6 +141,11 @@ async def get_frontmatter(ctx: RunContext[VaultDeps], path: str) -> str:
 
 async def update_frontmatter(ctx: RunContext[VaultDeps], path: str, updates: dict[str, Any]) -> str:
     """Update specific fields in a file's YAML frontmatter. Only specified fields change."""
+    if not _tool_allowed(ctx, "update_frontmatter"):
+        return "Error: update_frontmatter is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.update_frontmatter(path, updates)
         ctx.deps.changed_files.add(path)
@@ -115,6 +158,11 @@ async def update_frontmatter(ctx: RunContext[VaultDeps], path: str, updates: dic
 
 async def set_frontmatter(ctx: RunContext[VaultDeps], path: str, data: dict[str, Any]) -> str:
     """Replace a file's entire YAML frontmatter with the provided object."""
+    if not _tool_allowed(ctx, "set_frontmatter"):
+        return "Error: set_frontmatter is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.set_frontmatter(path, data)
         ctx.deps.changed_files.add(path)
@@ -127,6 +175,11 @@ async def set_frontmatter(ctx: RunContext[VaultDeps], path: str, data: dict[str,
 
 async def delete_frontmatter_field(ctx: RunContext[VaultDeps], path: str, field: str) -> str:
     """Delete a specific YAML frontmatter field from a file."""
+    if not _tool_allowed(ctx, "delete_frontmatter_field"):
+        return "Error: delete_frontmatter_field is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.delete_frontmatter_field(path, field)
         ctx.deps.changed_files.add(path)
@@ -152,6 +205,11 @@ async def read_heading(ctx: RunContext[VaultDeps], path: str, heading: str) -> s
 
 async def write_heading(ctx: RunContext[VaultDeps], path: str, heading: str, content: str) -> str:
     """Replace content under a heading. If heading doesn't exist, it's appended."""
+    if not _tool_allowed(ctx, "write_heading"):
+        return "Error: write_heading is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.write_heading(path, heading, content)
         ctx.deps.changed_files.add(path)
@@ -177,6 +235,11 @@ async def read_block(ctx: RunContext[VaultDeps], path: str, block_id: str) -> st
 
 async def write_block(ctx: RunContext[VaultDeps], path: str, block_id: str, content: str) -> str:
     """Replace the content of a block identified by its ^block-id."""
+    if not _tool_allowed(ctx, "write_block"):
+        return "Error: write_block is not allowed in this interface/scope"
+    if not _path_allowed(ctx, path):
+        return "Error: write target is outside allowed scope"
+
     try:
         ctx.deps.vault.write_block(path, block_id, content)
         ctx.deps.changed_files.add(path)

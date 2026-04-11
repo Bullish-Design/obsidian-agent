@@ -47,7 +47,13 @@ class Agent:
 
         @self._pydantic_agent.instructions
         def dynamic_instructions(ctx) -> str:  # type: ignore[no-untyped-def]
-            return build_system_prompt(ctx.deps.current_file)
+            return build_system_prompt(
+                ctx.deps.current_file,
+                interface_id=ctx.deps.interface_id,
+                scope_kind=ctx.deps.scope_kind,
+                intent=ctx.deps.intent,
+                profile_suffix=ctx.deps.profile_prompt_suffix,
+            )
 
         register_tools(self._pydantic_agent)
 
@@ -155,19 +161,44 @@ class Agent:
     def _release_busy(self) -> None:
         self._busy = False
 
-    async def run(self, instruction: str, current_file: str | None = None) -> RunResult:
+    async def run(
+        self,
+        instruction: str,
+        current_file: str | None = None,
+        *,
+        interface_id: str = "command",
+        scope: object | None = None,
+        intent: str | None = None,
+        allowed_write_scope: str = "unrestricted",
+        allowed_tool_names: set[str] | None = None,
+        allowed_write_paths: set[str] | None = None,
+        profile_prompt_suffix: str | None = None,
+    ) -> RunResult:
         self._acquire_busy()
         logger.info(
             "agent.run_start",
             extra={
                 "instruction_len": len(instruction),
                 "has_current_file": bool(current_file),
+                "interface_id": interface_id,
+                "scope_kind": getattr(scope, "kind", None),
+                "intent": intent,
                 "timeout_s": self.config.operation_timeout,
             },
         )
         try:
             result = await asyncio.wait_for(
-                self._run_impl(instruction, current_file),
+                self._run_impl(
+                    instruction,
+                    current_file,
+                    interface_id=interface_id,
+                    scope=scope,
+                    intent=intent,
+                    allowed_write_scope=allowed_write_scope,
+                    allowed_tool_names=allowed_tool_names,
+                    allowed_write_paths=allowed_write_paths,
+                    profile_prompt_suffix=profile_prompt_suffix,
+                ),
                 timeout=self.config.operation_timeout,
             )
             logger.info(
@@ -192,8 +223,30 @@ class Agent:
         finally:
             self._release_busy()
 
-    async def _run_impl(self, instruction: str, current_file: str | None) -> RunResult:
-        deps = VaultDeps(vault=self.vault, current_file=current_file)
+    async def _run_impl(
+        self,
+        instruction: str,
+        current_file: str | None,
+        *,
+        interface_id: str,
+        scope: object | None,
+        intent: str | None,
+        allowed_write_scope: str,
+        allowed_tool_names: set[str] | None,
+        allowed_write_paths: set[str] | None,
+        profile_prompt_suffix: str | None,
+    ) -> RunResult:
+        deps = VaultDeps(
+            vault=self.vault,
+            current_file=current_file,
+            interface_id=interface_id,
+            scope_kind=getattr(scope, "kind", None),
+            intent=intent,
+            allowed_write_scope=allowed_write_scope,
+            allowed_tool_names=allowed_tool_names,
+            allowed_write_paths=allowed_write_paths,
+            profile_prompt_suffix=profile_prompt_suffix,
+        )
         limits = UsageLimits(request_limit=self.config.max_iterations)
 
         try:

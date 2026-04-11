@@ -54,8 +54,12 @@ def client(app_workspace: VaultWorkspace, monkeypatch: pytest.MonkeyPatch) -> Te
     def undo_noop() -> UndoResult:
         return UndoResult()
 
-    async def run_noop(instruction: str, current_file: str | None = None) -> RunResult:
-        _ = instruction, current_file
+    async def run_noop(
+        instruction: str,
+        current_file: str | None = None,
+        **kwargs,
+    ) -> RunResult:
+        _ = instruction, current_file, kwargs
         return RunResult(ok=True, updated=False, summary="No changes needed")
 
     monkeypatch.setattr(vault, "commit", commit_noop)
@@ -91,6 +95,50 @@ def test_post_apply_with_current_file(client: TestClient) -> None:
     )
 
     assert response.status_code == 200
+
+
+def test_post_apply_with_scope_and_forge_web_interface(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[str, str | None, dict]] = []
+
+    async def run_spy(
+        instruction: str,
+        current_file: str | None = None,
+        **kwargs,
+    ) -> RunResult:
+        captured.append((instruction, current_file, kwargs))
+        return RunResult(ok=True, updated=False, summary="No changes needed")
+
+    monkeypatch.setattr(client.app.state.agent, "run", run_spy)
+
+    response = client.post(
+        "/api/apply",
+        json={
+            "instruction": "Summarize this section",
+            "interface_id": "forge_web",
+            "scope": {"kind": "heading", "path": "note.md", "heading": "## Test"},
+            "intent": "summarize",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured[0][0] == "Summarize this section"
+    assert captured[0][1] == "note.md"
+    assert captured[0][2]["interface_id"] == "forge_web"
+    assert captured[0][2]["allowed_write_paths"] == {"note.md"}
+    assert "write_file" not in captured[0][2]["allowed_tool_names"]
+
+
+def test_post_apply_rejects_mismatched_scope_and_current_file(client: TestClient) -> None:
+    response = client.post(
+        "/api/apply",
+        json={
+            "instruction": "Summarize this",
+            "current_file": "note.md",
+            "scope": {"kind": "file", "path": "other.md"},
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_post_apply_with_invalid_current_file_returns_422(client: TestClient) -> None:
@@ -159,10 +207,14 @@ def test_post_apply_missing_instruction_returns_200_error(client: TestClient) ->
 
 
 def test_post_apply_defaults_interface_to_command(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[tuple[str, str | None]] = []
+    captured: list[tuple[str, str | None, dict]] = []
 
-    async def run_spy(instruction: str, current_file: str | None = None) -> RunResult:
-        captured.append((instruction, current_file))
+    async def run_spy(
+        instruction: str,
+        current_file: str | None = None,
+        **kwargs,
+    ) -> RunResult:
+        captured.append((instruction, current_file, kwargs))
         return RunResult(ok=True, updated=False, summary="No changes needed")
 
     monkeypatch.setattr(client.app.state.agent, "run", run_spy)
@@ -170,12 +222,44 @@ def test_post_apply_defaults_interface_to_command(client: TestClient, monkeypatc
     response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
 
     assert response.status_code == 200
-    assert captured == [("Summarize this", "note.md")]
+    assert captured == [
+        (
+            "Summarize this",
+            "note.md",
+            {
+                "interface_id": "command",
+                "scope": None,
+                "intent": None,
+                "allowed_write_scope": "target_only",
+                "allowed_tool_names": {
+                    "delete_file",
+                    "delete_frontmatter_field",
+                    "get_frontmatter",
+                    "list_files",
+                    "read_block",
+                    "read_file",
+                    "read_heading",
+                    "search_files",
+                    "set_frontmatter",
+                    "update_frontmatter",
+                    "write_block",
+                    "write_file",
+                    "write_heading",
+                },
+                "allowed_write_paths": None,
+                "profile_prompt_suffix": "",
+            },
+        )
+    ]
 
 
 def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def timeout_run(instruction: str, current_file: str | None = None) -> RunResult:
-        _ = instruction, current_file
+    async def timeout_run(
+        instruction: str,
+        current_file: str | None = None,
+        **kwargs,
+    ) -> RunResult:
+        _ = instruction, current_file, kwargs
         return RunResult(
             ok=False,
             updated=False,
@@ -194,8 +278,12 @@ def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch:
 
 
 def test_apply_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def busy_run(instruction: str, current_file: str | None = None) -> RunResult:
-        _ = instruction, current_file
+    async def busy_run(
+        instruction: str,
+        current_file: str | None = None,
+        **kwargs,
+    ) -> RunResult:
+        _ = instruction, current_file, kwargs
         raise BusyError("Another operation is already running")
 
     monkeypatch.setattr(client.app.state.agent, "run", busy_run)
@@ -219,8 +307,12 @@ def test_undo_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPat
 
 
 def test_apply_vault_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def vault_busy_run(instruction: str, current_file: str | None = None) -> RunResult:
-        _ = instruction, current_file
+    async def vault_busy_run(
+        instruction: str,
+        current_file: str | None = None,
+        **kwargs,
+    ) -> RunResult:
+        _ = instruction, current_file, kwargs
         raise VaultBusyError("vault is busy elsewhere")
 
     monkeypatch.setattr(client.app.state.agent, "run", vault_busy_run)

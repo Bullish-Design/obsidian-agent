@@ -277,3 +277,19 @@ async def test_tools_propagate_unexpected_runtime_errors() -> None:
 
     with pytest.raises(RuntimeError, match="boom"):
         await read_file(make_ctx(deps), "note.md")
+
+
+async def test_write_file_rejected_when_tool_not_allowed(vault: Vault) -> None:
+    deps = VaultDeps(vault=vault, allowed_tool_names={"read_file"})
+
+    result = await write_file(make_ctx(deps), "note.md", "updated")
+
+    assert result == "Error: write_file is not allowed in this interface/scope"
+
+
+async def test_write_heading_rejected_when_path_outside_allowed_scope(vault: Vault) -> None:
+    deps = VaultDeps(vault=vault, allowed_tool_names={"write_heading"}, allowed_write_paths={"note.md"})
+
+    result = await write_heading(make_ctx(deps), "plain.md", "## Added", "x")
+
+    assert result == "Error: write target is outside allowed scope"

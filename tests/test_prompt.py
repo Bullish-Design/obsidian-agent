@@ -27,3 +27,18 @@ def test_with_current_file_none() -> None:
     prompt = build_system_prompt(None)
 
     assert "currently viewing" not in prompt
+
+
+def test_with_interface_scope_and_intent() -> None:
+    prompt = build_system_prompt(
+        "Projects/Alpha.md",
+        interface_id="forge_web",
+        scope_kind="heading",
+        intent="summarize",
+        profile_suffix="Do not edit outside scope.",
+    )
+
+    assert "Interface: forge_web" in prompt
+    assert "Scope: heading" in prompt
+    assert "Intent: summarize" in prompt
+    assert "Do not edit outside scope." in prompt

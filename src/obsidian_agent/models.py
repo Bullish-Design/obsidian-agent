@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -73,3 +74,37 @@ class OperationResult(BaseModel):
 class HealthResponse(BaseModel):
     ok: bool
     status: str
+
+
+class VaultFileWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None = None
+    url: str | None = None
+    content: str
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class VaultFileReadResponse(BaseModel):
+    ok: bool = True
+    path: str
+    url: str | None = None
+    content: str
+    sha256: str
+    modified_at: datetime
+
+
+class VaultFileWriteResponse(BaseModel):
+    ok: bool = True
+    path: str
+    url: str | None = None
+    sha256: str
+    modified_at: datetime
+    warning: str | None = None
+
+
+class VaultUndoResponse(BaseModel):
+    ok: bool = True
+    updated: bool = True
+    summary: str = "Last change undone."
+    warning: str | None = None

@@ -3,6 +3,7 @@ import hashlib
 import pytest
 from fastapi.testclient import TestClient
 from obsidian_ops import Vault
+from obsidian_ops.errors import BusyError as VaultBusyError
 
 from obsidian_agent.agent import Agent
 from obsidian_agent.app import create_app
@@ -124,3 +125,34 @@ def test_put_file_rejects_neither_path_nor_url(client: TestClient) -> None:
 
     assert response.status_code == 400
     assert "exactly one" in response.json()["detail"]
+
+
+def test_vault_undo_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    class UndoResult:
+        warning = None
+
+    def undo_last_change() -> UndoResult:
+        return UndoResult()
+
+    monkeypatch.setattr(client.app.state.vault, "undo_last_change", undo_last_change)
+
+    response = client.post("/api/vault/undo")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["updated"] is True
+    assert payload["summary"] == "Last change undone."
+    assert payload["warning"] is None
+
+
+def test_vault_undo_busy_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def undo_last_change() -> None:
+        raise VaultBusyError("vault is busy elsewhere")
+
+    monkeypatch.setattr(client.app.state.vault, "undo_last_change", undo_last_change)
+
+    response = client.post("/api/vault/undo")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "vault is busy elsewhere"

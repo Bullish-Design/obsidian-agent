@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
 
-from ..models import VaultFileReadResponse, VaultFileWriteRequest, VaultFileWriteResponse
+from ..models import VaultFileReadResponse, VaultFileWriteRequest, VaultFileWriteResponse, VaultUndoResponse
 from ..web_paths import resolve_path_or_url, vault_path_to_url
 
 logger = logging.getLogger(__name__)
@@ -112,3 +112,21 @@ async def put_file(request: Request, payload: VaultFileWriteRequest) -> VaultFil
         )
     except VaultBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@vault_router.post("/undo", response_model=VaultUndoResponse)
+async def vault_undo(request: Request) -> VaultUndoResponse:
+    vault: Vault = request.app.state.vault
+    try:
+        if hasattr(vault, "undo_last_change"):
+            result = vault.undo_last_change()
+            warning = getattr(result, "warning", None)
+        else:
+            vault.undo()
+            warning = None
+
+        return VaultUndoResponse(warning=warning)
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"undo failed: {exc}") from exc

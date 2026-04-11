@@ -145,3 +145,38 @@ class EnsureAnchorResponse(BaseModel):
     path: str
     block_id: str
     sha256: str | None = None
+
+
+class TemplateFieldInfo(BaseModel):
+    name: str
+    label: str
+    required: bool = True
+    description: str | None = None
+    default: str | None = None
+
+
+class TemplateInfo(BaseModel):
+    key: str
+    label: str
+    fields: list[TemplateFieldInfo] = Field(default_factory=list)
+    commit_message: str | None = None
+
+
+class TemplateListResponse(BaseModel):
+    ok: bool = True
+    templates: list[TemplateInfo] = Field(default_factory=list)
+
+
+class CreatePageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str
+    fields: dict[str, str] = Field(default_factory=dict)
+
+
+class CreatePageResponse(BaseModel):
+    ok: bool = True
+    template_id: str
+    path: str
+    url: str
+    sha256: str

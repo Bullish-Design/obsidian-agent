@@ -1,4 +1,5 @@
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -232,3 +233,136 @@ def test_ensure_anchor_rejects_invalid_line_range(client: TestClient) -> None:
 
     assert response.status_code == 400
     assert "line_end must be >= line_start" in response.json()["detail"]
+
+
+def _write_template(vault_root: Path, name: str, body: str) -> None:
+    template_dir = vault_root / ".forge" / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / name).write_text(body, encoding="utf-8")
+
+
+def test_list_page_templates_happy_path(client: TestClient) -> None:
+    _write_template(
+        Path(client.app.state.vault.root),
+        "project.yaml",
+        (
+            "id: project\n"
+            "label: Project Page\n"
+            "path: Projects/{{ slug(title) }}.md\n"
+            "body: |\n"
+            "  # {{ title }}\n"
+            "fields:\n"
+            "  - name: title\n"
+            "    label: Title\n"
+            "    required: true\n"
+        ),
+    )
+
+    response = client.get("/api/vault/pages/templates")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert len(payload["templates"]) == 1
+    assert payload["templates"][0]["key"] == "project"
+    assert payload["templates"][0]["label"] == "Project Page"
+    assert payload["templates"][0]["fields"][0]["name"] == "title"
+
+
+def test_list_page_templates_returns_501_when_unavailable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client.app.state.vault, "list_templates", None, raising=False)
+
+    response = client.get("/api/vault/pages/templates")
+
+    assert response.status_code == 501
+    assert "list_templates" in response.json()["detail"]
+
+
+def test_create_page_from_template_happy_path(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_template(
+        Path(client.app.state.vault.root),
+        "project.yaml",
+        (
+            "id: project\n"
+            "label: Project Page\n"
+            "path: Projects/{{ slug(title) }}.md\n"
+            "body: |\n"
+            "  # {{ title }}\n"
+            "  status: draft\n"
+            "fields:\n"
+            "  - name: title\n"
+            "    label: Title\n"
+            "    required: true\n"
+        ),
+    )
+
+    class FakeJJ:
+        def describe(self, message: str) -> None:
+            _ = message
+
+        def new(self) -> None:
+            return None
+
+    monkeypatch.setattr(client.app.state.vault, "_get_jj", lambda: FakeJJ())
+
+    response = client.post(
+        "/api/vault/pages",
+        json={"template_id": "project", "fields": {"title": "Alpha Launch"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["template_id"] == "project"
+    assert payload["path"] == "Projects/alpha-launch.md"
+    assert payload["url"] == "http://localhost:8080/Projects/alpha-launch/"
+    assert payload["sha256"]
+
+    created_path = Path(client.app.state.vault.root) / payload["path"]
+    assert created_path.exists()
+    assert "# Alpha Launch" in created_path.read_text(encoding="utf-8")
+
+
+def test_create_page_from_template_conflict_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_template(
+        Path(client.app.state.vault.root),
+        "project.yaml",
+        (
+            "id: project\n"
+            "label: Project Page\n"
+            "path: Projects/{{ slug(title) }}.md\n"
+            "body: |\n"
+            "  # {{ title }}\n"
+            "fields:\n"
+            "  - name: title\n"
+            "    label: Title\n"
+            "    required: true\n"
+        ),
+    )
+
+    class FakeJJ:
+        def describe(self, message: str) -> None:
+            _ = message
+
+        def new(self) -> None:
+            return None
+
+    monkeypatch.setattr(client.app.state.vault, "_get_jj", lambda: FakeJJ())
+
+    first = client.post("/api/vault/pages", json={"template_id": "project", "fields": {"title": "Alpha"}})
+    assert first.status_code == 200
+
+    second = client.post("/api/vault/pages", json={"template_id": "project", "fields": {"title": "Alpha"}})
+    assert second.status_code == 409
+
+
+def test_create_page_from_template_returns_501_when_unavailable(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(client.app.state.vault, "create_from_template", None, raising=False)
+
+    response = client.post("/api/vault/pages", json={"template_id": "project", "fields": {"title": "Alpha"}})
+
+    assert response.status_code == 501
+    assert "create_from_template" in response.json()["detail"]

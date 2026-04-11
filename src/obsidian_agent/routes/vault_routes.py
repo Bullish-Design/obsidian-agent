@@ -8,10 +8,16 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from obsidian_ops import Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
+from obsidian_ops.errors import VCSError, VaultError
 
 from ..models import (
     EnsureAnchorRequest,
     EnsureAnchorResponse,
+    CreatePageRequest,
+    CreatePageResponse,
+    TemplateFieldInfo,
+    TemplateInfo,
+    TemplateListResponse,
     VaultFileReadResponse,
     VaultFileWriteRequest,
     VaultFileWriteResponse,
@@ -213,4 +219,68 @@ async def ensure_file_anchor(request: Request, payload: EnsureAnchorRequest) -> 
         path=resolved_path,
         block_id=getattr(result, "block_id"),
         sha256=getattr(result, "sha256", None),
+    )
+
+
+@vault_router.get("/pages/templates", response_model=TemplateListResponse)
+async def list_page_templates(request: Request) -> TemplateListResponse:
+    vault: Vault = request.app.state.vault
+    list_templates = getattr(vault, "list_templates", None)
+    if list_templates is None:
+        raise HTTPException(status_code=501, detail="list_templates not available in installed obsidian-ops")
+
+    try:
+        templates = list_templates()
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VaultError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload_items: list[TemplateInfo] = []
+    for template in templates:
+        fields = [
+            TemplateFieldInfo(
+                name=field.name,
+                label=field.label,
+                required=field.required,
+                description=field.description,
+                default=field.default,
+            )
+            for field in template.fields
+        ]
+        payload_items.append(
+            TemplateInfo(
+                key=template.key,
+                label=template.label,
+                fields=fields,
+                commit_message=template.commit_message,
+            )
+        )
+    return TemplateListResponse(templates=payload_items)
+
+
+@vault_router.post("/pages", response_model=CreatePageResponse)
+async def create_page_from_template(request: Request, payload: CreatePageRequest) -> CreatePageResponse:
+    vault: Vault = request.app.state.vault
+    config = request.app.state.config
+    create_from_template = getattr(vault, "create_from_template", None)
+    if create_from_template is None:
+        raise HTTPException(status_code=501, detail="create_from_template not available in installed obsidian-ops")
+
+    try:
+        created = create_from_template(payload.template_id, payload.fields)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VCSError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VaultError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return CreatePageResponse(
+        template_id=created.template_id,
+        path=created.path,
+        url=vault_path_to_url(path=created.path, site_base_url=config.site_base_url, flat_urls=config.flat_urls),
+        sha256=created.sha256,
     )

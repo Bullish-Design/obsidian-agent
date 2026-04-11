@@ -1,0 +1,15 @@
+session_name: Obsidian-Agent
+windows:
+  - window_name: Obsidian-Agent
+    layout: main-vertical
+    options:
+      main-pane-width: 20%
+    panes:
+      - shell_command:
+          - cd ~/Documents/Projects/obsidian-agent
+          - open-project
+      - shell_command:
+          - tmux resizep -y 85%
+          - filelist-open "startup_files.txt" obsidian-agent
+        focus: true
+      - clear

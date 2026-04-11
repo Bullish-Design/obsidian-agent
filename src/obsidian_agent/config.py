@@ -16,6 +16,8 @@ class AgentConfig(BaseSettings):
     operation_timeout: int = Field(default=120, gt=0)
     jj_bin: str = "jj"
     jj_timeout: int = Field(default=120, gt=0)
+    site_base_url: str = "http://127.0.0.1:8080"
+    flat_urls: bool = False
     host: str = "127.0.0.1"
     port: int = Field(default=8081, ge=1, le=65535)
 
@@ -60,3 +62,17 @@ class AgentConfig(BaseSettings):
             normalized_path = "/v1"
 
         return urlunparse(parsed._replace(path=normalized_path))
+
+    @field_validator("site_base_url")
+    @classmethod
+    def normalize_site_base_url(cls, value: str) -> str:
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"}:
+            msg = "site_base_url must use http or https"
+            raise ValueError(msg)
+        if not parsed.netloc:
+            msg = "site_base_url must include a host"
+            raise ValueError(msg)
+
+        normalized_path = parsed.path.rstrip("/")
+        return urlunparse(parsed._replace(path=normalized_path, query="", fragment=""))

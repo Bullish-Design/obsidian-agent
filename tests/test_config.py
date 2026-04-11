@@ -21,6 +21,8 @@ def test_valid_config_from_kwargs(config_workspace: VaultWorkspace) -> None:
     assert cfg.operation_timeout == 120
     assert cfg.jj_bin == "jj"
     assert cfg.jj_timeout == 120
+    assert cfg.site_base_url == "http://127.0.0.1:8080"
+    assert cfg.flat_urls is False
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8081
 
@@ -34,6 +36,8 @@ def test_valid_config_from_env_vars(monkeypatch: pytest.MonkeyPatch, config_work
     monkeypatch.setenv("AGENT_OPERATION_TIMEOUT", "90")
     monkeypatch.setenv("AGENT_JJ_BIN", "jj-custom")
     monkeypatch.setenv("AGENT_JJ_TIMEOUT", "30")
+    monkeypatch.setenv("AGENT_SITE_BASE_URL", "https://example.com/notes/")
+    monkeypatch.setenv("AGENT_FLAT_URLS", "true")
     monkeypatch.setenv("AGENT_HOST", "0.0.0.0")
     monkeypatch.setenv("AGENT_PORT", "9090")
 
@@ -47,6 +51,8 @@ def test_valid_config_from_env_vars(monkeypatch: pytest.MonkeyPatch, config_work
     assert cfg.operation_timeout == 90
     assert cfg.jj_bin == "jj-custom"
     assert cfg.jj_timeout == 30
+    assert cfg.site_base_url == "https://example.com/notes"
+    assert cfg.flat_urls is True
     assert cfg.host == "0.0.0.0"
     assert cfg.port == 9090
 
@@ -95,6 +101,8 @@ def test_default_values(config_workspace: VaultWorkspace) -> None:
     assert cfg.operation_timeout == 120
     assert cfg.jj_bin == "jj"
     assert cfg.jj_timeout == 120
+    assert cfg.site_base_url == "http://127.0.0.1:8080"
+    assert cfg.flat_urls is False
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8081
 
@@ -114,6 +122,26 @@ def test_invalid_model_string_with_empty_segment(config_workspace: VaultWorkspac
 def test_invalid_base_url(config_workspace: VaultWorkspace, url: str) -> None:
     with pytest.raises(ValidationError):
         AgentConfig(vault_dir=config_workspace.work_dir, llm_base_url=url)
+
+
+@pytest.mark.parametrize(
+    ("raw", "normalized"),
+    [
+        ("http://localhost:8080", "http://localhost:8080"),
+        ("http://localhost:8080/", "http://localhost:8080"),
+        ("https://example.com/site/", "https://example.com/site"),
+    ],
+)
+def test_site_base_url_normalization(config_workspace: VaultWorkspace, raw: str, normalized: str) -> None:
+    cfg = AgentConfig(vault_dir=config_workspace.work_dir, site_base_url=raw)
+
+    assert cfg.site_base_url == normalized
+
+
+@pytest.mark.parametrize("url", ["ftp://localhost:8080", "localhost:8080", "http:///x"])
+def test_invalid_site_base_url(config_workspace: VaultWorkspace, url: str) -> None:
+    with pytest.raises(ValidationError):
+        AgentConfig(vault_dir=config_workspace.work_dir, site_base_url=url)
 
 
 @pytest.mark.parametrize(

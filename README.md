@@ -29,6 +29,31 @@ All vault and VCS mechanics must remain in `obsidian-ops` (`Vault` and its API s
 - `GET /api/health`
   - output: `{ "ok": true, "status": "healthy" }`
 
+## Vault Sync Endpoints
+
+`obsidian-agent` now exposes sync operations backed by `obsidian-ops` under `/api/vault/vcs/sync/*`:
+
+- `GET /api/vault/vcs/sync/readiness`
+  - output: `{ "ok": true, "status": "ready|migration_needed|error", "detail": "..." }`
+- `POST /api/vault/vcs/sync/ensure`
+  - output: same shape as readiness; attempts safe sync initialization
+- `PUT /api/vault/vcs/sync/remote`
+  - input: `{ "url": "...", "token": "...optional...", "remote": "origin" }`
+  - output: `{ "ok": true, "detail": null }`
+- `POST /api/vault/vcs/sync/fetch`
+  - input: `{ "remote": "origin" }`
+  - output: `{ "ok": true, "detail": null }`
+- `POST /api/vault/vcs/sync/push`
+  - input: `{ "remote": "origin" }`
+  - output: `{ "ok": true, "detail": null }`
+- `POST /api/vault/vcs/sync`
+  - input: `{ "remote": "origin", "conflict_prefix": "sync-conflict" }`
+  - output: `{ "ok": true, "sync_ok": true|false, "conflict": bool, "conflict_bookmark": "...", "error": "..." }`
+- `GET /api/vault/vcs/sync/status`
+  - output: `{ "ok": true, "status": { ...opaque sync state from obsidian-ops... } }`
+
+Conflict outcomes are modeled in the response body (`sync_ok=false`, `conflict=true`) and returned as HTTP 200.
+
 ## `current_file` Contract
 
 - `current_file` is optional.
@@ -47,8 +72,17 @@ All vault and VCS mechanics must remain in `obsidian-ops` (`Vault` and its API s
 - `AGENT_OPERATION_TIMEOUT` (default: `120`)
 - `AGENT_JJ_BIN` (default: `jj`)
 - `AGENT_JJ_TIMEOUT` (default: `120`)
+- `AGENT_SYNC_AFTER_COMMIT` (default: `false`)
+- `AGENT_SYNC_REMOTE` (default: `origin`)
 - `AGENT_HOST` (default: `127.0.0.1`)
 - `AGENT_PORT` (default: `8081`)
+
+## Sync Behavior Notes
+
+- `/api/apply` remains commit-only by default.
+- Automatic post-commit sync is opt-in via `AGENT_SYNC_AFTER_COMMIT=true`.
+- Sync token values provided through sync remote configuration are handled by `obsidian-ops`, which stores credentials in vault-local `.forge/git-credential.sh`.
+- The agent request logger does not log request bodies, so sync tokens are not emitted in structured request logs.
 
 ## Local Development
 

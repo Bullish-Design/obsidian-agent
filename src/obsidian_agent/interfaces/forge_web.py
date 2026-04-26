@@ -9,6 +9,8 @@ READ_ONLY = {
     "get_frontmatter",
     "read_heading",
     "read_block",
+    "check_sync_readiness",
+    "sync_status",
 }
 
 

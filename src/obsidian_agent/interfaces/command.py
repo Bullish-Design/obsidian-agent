@@ -23,6 +23,13 @@ class CommandProfile:
             "read_block",
             "write_block",
             "create_from_template",
+            "check_sync_readiness",
+            "ensure_sync_ready",
+            "configure_sync_remote",
+            "sync_fetch",
+            "sync_push",
+            "sync_now",
+            "sync_status",
         }
 
     def prompt_suffix(self, scope: EditScope | None, intent: str | None) -> str:

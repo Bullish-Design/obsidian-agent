@@ -6,3 +6,7 @@
 __pycache__/
 *.pyc
 .coverage
+
+# Demo vault local VCS state
+obsidian-agent_demo-vault/.git/
+obsidian-agent_demo-vault/.jj/

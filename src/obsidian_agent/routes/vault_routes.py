@@ -15,6 +15,13 @@ from ..models import (
     EnsureAnchorResponse,
     CreatePageRequest,
     CreatePageResponse,
+    SyncOpResponse,
+    SyncReadinessResponse,
+    SyncRemoteOpRequest,
+    SyncRemoteRequest,
+    SyncRequest,
+    SyncResultResponse,
+    SyncStatusResponse,
     TemplateFieldInfo,
     TemplateInfo,
     TemplateListResponse,
@@ -303,3 +310,95 @@ async def create_page_from_template(request: Request, payload: CreatePageRequest
         url=vault_path_to_url(path=created.path, site_base_url=config.site_base_url, flat_urls=config.flat_urls),
         sha256=created.sha256,
     )
+
+
+@vault_router.get("/vcs/sync/readiness", response_model=SyncReadinessResponse)
+async def get_sync_readiness(request: Request) -> SyncReadinessResponse:
+    vault: Vault = request.app.state.vault
+    try:
+        result = vault.check_sync_readiness()
+        return SyncReadinessResponse(status=result.status.value, detail=result.detail)
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@vault_router.post("/vcs/sync/ensure", response_model=SyncReadinessResponse)
+async def ensure_sync_ready(request: Request) -> SyncReadinessResponse:
+    _enforce_rate_limit(request, "vault.sync_ensure")
+    vault: Vault = request.app.state.vault
+    try:
+        result = vault.ensure_sync_ready()
+        return SyncReadinessResponse(status=result.status.value, detail=result.detail)
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VCSError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+
+
+@vault_router.put("/vcs/sync/remote", response_model=SyncOpResponse)
+async def configure_sync_remote(request: Request, payload: SyncRemoteRequest) -> SyncOpResponse:
+    _enforce_rate_limit(request, "vault.sync_remote")
+    vault: Vault = request.app.state.vault
+    try:
+        vault.configure_sync_remote(payload.url, token=payload.token, remote=payload.remote)
+        return SyncOpResponse()
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VCSError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@vault_router.post("/vcs/sync/fetch", response_model=SyncOpResponse)
+async def sync_fetch(request: Request, payload: SyncRemoteOpRequest) -> SyncOpResponse:
+    _enforce_rate_limit(request, "vault.sync_fetch")
+    vault: Vault = request.app.state.vault
+    try:
+        vault.sync_fetch(remote=payload.remote)
+        return SyncOpResponse()
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VCSError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+
+
+@vault_router.post("/vcs/sync/push", response_model=SyncOpResponse)
+async def sync_push(request: Request, payload: SyncRemoteOpRequest) -> SyncOpResponse:
+    _enforce_rate_limit(request, "vault.sync_push")
+    vault: Vault = request.app.state.vault
+    try:
+        vault.sync_push(remote=payload.remote)
+        return SyncOpResponse()
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VCSError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+
+
+@vault_router.post("/vcs/sync", response_model=SyncResultResponse)
+async def sync(request: Request, payload: SyncRequest) -> SyncResultResponse:
+    _enforce_rate_limit(request, "vault.sync")
+    vault: Vault = request.app.state.vault
+    try:
+        result = vault.sync(remote=payload.remote, conflict_prefix=payload.conflict_prefix)
+        return SyncResultResponse(
+            sync_ok=result.ok,
+            conflict=result.conflict,
+            conflict_bookmark=result.conflict_bookmark,
+            error=result.error,
+        )
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VCSError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+
+
+@vault_router.get("/vcs/sync/status", response_model=SyncStatusResponse)
+async def get_sync_status(request: Request) -> SyncStatusResponse:
+    vault: Vault = request.app.state.vault
+    try:
+        status = vault.sync_status()
+        return SyncStatusResponse(status=status)
+    except VaultBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

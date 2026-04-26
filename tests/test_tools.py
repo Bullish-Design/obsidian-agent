@@ -3,14 +3,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from obsidian_ops import Vault
+from obsidian_ops import ReadinessCheck, SyncResult, VCSReadiness, Vault
 from obsidian_ops.errors import BusyError, VaultError
 
 from obsidian_agent.tools import (
     VaultDeps,
+    check_sync_readiness,
+    configure_sync_remote,
     create_from_template,
     delete_file,
     delete_frontmatter_field,
+    ensure_sync_ready,
     get_frontmatter,
     list_files,
     read_block,
@@ -18,6 +21,10 @@ from obsidian_agent.tools import (
     read_heading,
     search_files,
     set_frontmatter,
+    sync_fetch,
+    sync_now,
+    sync_push,
+    sync_status,
     update_frontmatter,
     write_block,
     write_file,
@@ -326,3 +333,214 @@ async def test_create_from_template_success_tracks_changed_file() -> None:
 
     assert result == "Created Daily/my-day.md"
     assert "Daily/my-day.md" in deps.changed_files
+
+
+@pytest.mark.parametrize(
+    ("tool_fn", "args", "tool_name"),
+    [
+        (check_sync_readiness, (), "check_sync_readiness"),
+        (ensure_sync_ready, (), "ensure_sync_ready"),
+        (configure_sync_remote, ("https://github.com/example/repo.git",), "configure_sync_remote"),
+        (sync_fetch, (), "sync_fetch"),
+        (sync_push, (), "sync_push"),
+        (sync_now, (), "sync_now"),
+        (sync_status, (), "sync_status"),
+    ],
+)
+async def test_sync_tools_blocked_when_not_in_allowed_set(tool_fn, args, tool_name: str, vault: Vault) -> None:
+    deps = VaultDeps(vault=vault, allowed_tool_names={"read_file"})
+
+    result = await tool_fn(make_ctx(deps), *args)
+
+    assert result == f"Error: {tool_name} is not allowed in this interface/scope"
+
+
+async def test_check_sync_readiness_returns_status() -> None:
+    class SyncVault:
+        def check_sync_readiness(self) -> ReadinessCheck:
+            return ReadinessCheck(status=VCSReadiness.READY, detail=None)
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"check_sync_readiness"})  # type: ignore[arg-type]
+
+    result = await check_sync_readiness(make_ctx(deps))
+
+    assert result == "Sync readiness: ready"
+
+
+async def test_sync_status_returns_json() -> None:
+    class SyncVault:
+        def sync_status(self) -> dict[str, object]:
+            return {"last_sync_ok": True}
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"sync_status"})  # type: ignore[arg-type]
+
+    result = await sync_status(make_ctx(deps))
+    parsed = json.loads(result)
+    assert parsed["last_sync_ok"] is True
+
+
+async def test_ensure_sync_ready_success() -> None:
+    class SyncVault:
+        def ensure_sync_ready(self) -> ReadinessCheck:
+            return ReadinessCheck(status=VCSReadiness.READY, detail="ok")
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"ensure_sync_ready"})  # type: ignore[arg-type]
+
+    result = await ensure_sync_ready(make_ctx(deps))
+
+    assert result == "Sync readiness: ready (ok)"
+
+
+async def test_configure_sync_remote_success() -> None:
+    captured: dict[str, object] = {}
+
+    class SyncVault:
+        def configure_sync_remote(self, url: str, token: str | None = None, remote: str = "origin") -> None:
+            captured["url"] = url
+            captured["token"] = token
+            captured["remote"] = remote
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"configure_sync_remote"})  # type: ignore[arg-type]
+
+    result = await configure_sync_remote(
+        make_ctx(deps),
+        "https://github.com/example/repo.git",
+        token="tok",
+        remote="upstream",
+    )
+
+    assert result == "Remote 'upstream' configured for https://github.com/example/repo.git"
+    assert captured == {"url": "https://github.com/example/repo.git", "token": "tok", "remote": "upstream"}
+
+
+async def test_configure_sync_remote_invalid_url() -> None:
+    class SyncVault:
+        def configure_sync_remote(self, url: str, token: str | None = None, remote: str = "origin") -> None:
+            _ = token, remote
+            if not url.startswith("https://"):
+                raise ValueError("invalid sync remote URL")
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"configure_sync_remote"})  # type: ignore[arg-type]
+
+    result = await configure_sync_remote(make_ctx(deps), "bad-url")
+
+    assert result == "Error: invalid sync remote URL"
+
+
+async def test_sync_fetch_success() -> None:
+    class SyncVault:
+        def sync_fetch(self, remote: str = "origin") -> None:
+            assert remote == "upstream"
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"sync_fetch"})  # type: ignore[arg-type]
+
+    result = await sync_fetch(make_ctx(deps), remote="upstream")
+
+    assert result == "Fetched from 'upstream'"
+
+
+async def test_sync_push_success() -> None:
+    class SyncVault:
+        def sync_push(self, remote: str = "origin") -> None:
+            assert remote == "origin"
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"sync_push"})  # type: ignore[arg-type]
+
+    result = await sync_push(make_ctx(deps))
+
+    assert result == "Pushed to 'origin'"
+
+
+async def test_sync_now_clean_sync() -> None:
+    class SyncVault:
+        def sync(self, remote: str = "origin", conflict_prefix: str = "sync-conflict") -> SyncResult:
+            _ = remote, conflict_prefix
+            return SyncResult(ok=True)
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"sync_now"})  # type: ignore[arg-type]
+
+    result = await sync_now(make_ctx(deps))
+
+    assert result == "Sync completed successfully."
+
+
+async def test_sync_now_conflict() -> None:
+    class SyncVault:
+        def sync(self, remote: str = "origin", conflict_prefix: str = "sync-conflict") -> SyncResult:
+            _ = remote, conflict_prefix
+            return SyncResult(ok=False, conflict=True, conflict_bookmark="sync-conflict/2026-04-26T17-30-00Z")
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"sync_now"})  # type: ignore[arg-type]
+
+    result = await sync_now(make_ctx(deps))
+
+    assert result == "Sync conflict detected. Conflict bookmark: sync-conflict/2026-04-26T17-30-00Z"
+
+
+async def test_sync_now_failure() -> None:
+    class SyncVault:
+        def sync(self, remote: str = "origin", conflict_prefix: str = "sync-conflict") -> SyncResult:
+            _ = remote, conflict_prefix
+            return SyncResult(ok=False, conflict=False, error="auth failed")
+
+    deps = VaultDeps(vault=SyncVault(), allowed_tool_names={"sync_now"})  # type: ignore[arg-type]
+
+    result = await sync_now(make_ctx(deps))
+
+    assert result == "Sync failed: auth failed"
+
+
+@pytest.mark.parametrize(
+    ("tool_fn", "args"),
+    [
+        (check_sync_readiness, ()),
+        (ensure_sync_ready, ()),
+        (configure_sync_remote, ("https://github.com/example/repo.git",)),
+        (sync_fetch, ()),
+        (sync_push, ()),
+        (sync_now, ()),
+        (sync_status, ()),
+    ],
+)
+async def test_sync_tools_propagate_busy_error(tool_fn, args) -> None:
+    class BusyVault:
+        def check_sync_readiness(self) -> ReadinessCheck:
+            raise BusyError("busy")
+
+        def ensure_sync_ready(self) -> ReadinessCheck:
+            raise BusyError("busy")
+
+        def configure_sync_remote(self, url: str, token: str | None = None, remote: str = "origin") -> None:
+            _ = url, token, remote
+            raise BusyError("busy")
+
+        def sync_fetch(self, remote: str = "origin") -> None:
+            _ = remote
+            raise BusyError("busy")
+
+        def sync_push(self, remote: str = "origin") -> None:
+            _ = remote
+            raise BusyError("busy")
+
+        def sync(self, remote: str = "origin", conflict_prefix: str = "sync-conflict") -> SyncResult:
+            _ = remote, conflict_prefix
+            raise BusyError("busy")
+
+        def sync_status(self) -> dict[str, object]:
+            raise BusyError("busy")
+
+    deps = VaultDeps(
+        vault=BusyVault(),  # type: ignore[arg-type]
+        allowed_tool_names={
+            "check_sync_readiness",
+            "ensure_sync_ready",
+            "configure_sync_remote",
+            "sync_fetch",
+            "sync_push",
+            "sync_now",
+            "sync_status",
+        },
+    )
+
+    with pytest.raises(BusyError, match="busy"):
+        await tool_fn(make_ctx(deps), *args)

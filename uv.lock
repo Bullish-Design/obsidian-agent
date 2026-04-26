@@ -1417,7 +1417,7 @@ wheels = [
 
 [[package]]
 name = "obsidian-agent"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1444,7 +1444,7 @@ requires-dist = [
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.0" },
-    { name = "obsidian-ops", git = "https://github.com/Bullish-Design/obsidian-ops.git?tag=v0.5.0" },
+    { name = "obsidian-ops", git = "https://github.com/Bullish-Design/obsidian-ops.git?tag=v0.7.1" },
     { name = "pydantic", specifier = ">=2.12.0" },
     { name = "pydantic-ai", specifier = ">=1.7,<2.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
@@ -1457,8 +1457,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "obsidian-ops"
-version = "0.5.0"
-source = { git = "https://github.com/Bullish-Design/obsidian-ops.git?tag=v0.5.0#020f6639f596c29d61af40267229ddff35b61f02" }
+version = "0.7.1"
+source = { git = "https://github.com/Bullish-Design/obsidian-ops.git?tag=v0.7.1#dc452b3b1084c987c6b97f0c84e170982ee03c56" }
 dependencies = [
     { name = "fastapi" },
     { name = "pyyaml" },

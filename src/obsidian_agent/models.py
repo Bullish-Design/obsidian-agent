@@ -180,3 +180,54 @@ class CreatePageResponse(BaseModel):
     path: str
     url: str
     sha256: str
+
+
+class SyncRemoteRequest(BaseModel):
+    """Configure a sync remote (URL + optional token)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    token: str | None = None
+    remote: str = "origin"
+
+
+class SyncRemoteOpRequest(BaseModel):
+    """Request body for fetch/push (remote selection only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    remote: str = "origin"
+
+
+class SyncRequest(BaseModel):
+    """Request body for full sync cycle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    remote: str = "origin"
+    conflict_prefix: str = "sync-conflict"
+
+
+class SyncReadinessResponse(BaseModel):
+    ok: bool = True
+    status: str
+    detail: str | None = None
+
+
+class SyncOpResponse(BaseModel):
+    ok: bool = True
+    detail: str | None = None
+
+
+class SyncResultResponse(BaseModel):
+    ok: bool = True
+    sync_ok: bool
+    conflict: bool = False
+    conflict_bookmark: str | None = None
+    error: str | None = None
+
+
+class SyncStatusResponse(BaseModel):
+    ok: bool = True
+    status: dict

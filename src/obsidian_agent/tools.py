@@ -31,6 +31,11 @@ WRITE_TOOLS = {
     "delete_frontmatter_field",
     "write_heading",
     "write_block",
+    "ensure_sync_ready",
+    "configure_sync_remote",
+    "sync_fetch",
+    "sync_push",
+    "sync_now",
 }
 
 
@@ -270,6 +275,105 @@ async def create_from_template(ctx: RunContext[VaultDeps], template_id: str, fie
         return f"Error: {exc}"
 
 
+async def check_sync_readiness(ctx: RunContext[VaultDeps]) -> str:
+    """Check whether the vault is ready for sync operations."""
+    if not _tool_allowed(ctx, "check_sync_readiness"):
+        return "Error: check_sync_readiness is not allowed in this interface/scope"
+    try:
+        result = ctx.deps.vault.check_sync_readiness()
+        return f"Sync readiness: {result.status.value}" + (f" ({result.detail})" if result.detail else "")
+    except BusyError:
+        raise
+    except VaultError as exc:
+        return f"Error: {exc}"
+
+
+async def ensure_sync_ready(ctx: RunContext[VaultDeps]) -> str:
+    """Initialize the vault for sync if not already ready. Safe to call repeatedly."""
+    if not _tool_allowed(ctx, "ensure_sync_ready"):
+        return "Error: ensure_sync_ready is not allowed in this interface/scope"
+    try:
+        result = ctx.deps.vault.ensure_sync_ready()
+        return f"Sync readiness: {result.status.value}" + (f" ({result.detail})" if result.detail else "")
+    except BusyError:
+        raise
+    except VaultError as exc:
+        return f"Error: {exc}"
+
+
+async def configure_sync_remote(
+    ctx: RunContext[VaultDeps], url: str, token: str | None = None, remote: str = "origin"
+) -> str:
+    """Configure a git remote for sync. Optionally provide an auth token."""
+    if not _tool_allowed(ctx, "configure_sync_remote"):
+        return "Error: configure_sync_remote is not allowed in this interface/scope"
+    try:
+        ctx.deps.vault.configure_sync_remote(url, token=token, remote=remote)
+        return f"Remote '{remote}' configured for {url}"
+    except BusyError:
+        raise
+    except (VaultError, ValueError) as exc:
+        return f"Error: {exc}"
+
+
+async def sync_fetch(ctx: RunContext[VaultDeps], remote: str = "origin") -> str:
+    """Fetch changes from the sync remote."""
+    if not _tool_allowed(ctx, "sync_fetch"):
+        return "Error: sync_fetch is not allowed in this interface/scope"
+    try:
+        ctx.deps.vault.sync_fetch(remote=remote)
+        return f"Fetched from '{remote}'"
+    except BusyError:
+        raise
+    except VaultError as exc:
+        return f"Error: {exc}"
+
+
+async def sync_push(ctx: RunContext[VaultDeps], remote: str = "origin") -> str:
+    """Push local changes to the sync remote."""
+    if not _tool_allowed(ctx, "sync_push"):
+        return "Error: sync_push is not allowed in this interface/scope"
+    try:
+        ctx.deps.vault.sync_push(remote=remote)
+        return f"Pushed to '{remote}'"
+    except BusyError:
+        raise
+    except VaultError as exc:
+        return f"Error: {exc}"
+
+
+async def sync_now(
+    ctx: RunContext[VaultDeps], remote: str = "origin", conflict_prefix: str = "sync-conflict"
+) -> str:
+    """Run a full sync cycle: fetch, rebase, push. Reports conflicts if any."""
+    if not _tool_allowed(ctx, "sync_now"):
+        return "Error: sync_now is not allowed in this interface/scope"
+    try:
+        result = ctx.deps.vault.sync(remote=remote, conflict_prefix=conflict_prefix)
+        if result.ok:
+            return "Sync completed successfully."
+        if result.conflict:
+            return f"Sync conflict detected. Conflict bookmark: {result.conflict_bookmark}"
+        return f"Sync failed: {result.error}"
+    except BusyError:
+        raise
+    except VaultError as exc:
+        return f"Error: {exc}"
+
+
+async def sync_status(ctx: RunContext[VaultDeps]) -> str:
+    """Get the current sync state (last sync time, conflict status, etc.)."""
+    if not _tool_allowed(ctx, "sync_status"):
+        return "Error: sync_status is not allowed in this interface/scope"
+    try:
+        status = ctx.deps.vault.sync_status()
+        return json.dumps(status, indent=2, default=str)
+    except BusyError:
+        raise
+    except VaultError as exc:
+        return f"Error: {exc}"
+
+
 def register_tools(agent: Any) -> None:
     """Register all vault tools on a pydantic-ai Agent."""
     agent.tool(read_file)
@@ -286,3 +390,10 @@ def register_tools(agent: Any) -> None:
     agent.tool(read_block)
     agent.tool(write_block)
     agent.tool(create_from_template)
+    agent.tool(check_sync_readiness)
+    agent.tool(ensure_sync_ready)
+    agent.tool(configure_sync_remote)
+    agent.tool(sync_fetch)
+    agent.tool(sync_push)
+    agent.tool(sync_now)
+    agent.tool(sync_status)

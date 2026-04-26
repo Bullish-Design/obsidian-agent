@@ -291,6 +291,27 @@ class Agent:
                     extra={"changed_file_count": len(changed_files), "message_len": len(commit_message)},
                 )
 
+            if warning is None and self.config.sync_after_commit:
+                try:
+                    sync_result = self.vault.sync(remote=self.config.sync_remote)
+                    if sync_result.ok:
+                        logger.info("agent.post_commit_sync_success", extra={"remote": self.config.sync_remote})
+                    elif sync_result.conflict:
+                        warning = f"Post-commit sync conflict: {sync_result.conflict_bookmark}"
+                        logger.warning(
+                            "agent.post_commit_sync_conflict",
+                            extra={"bookmark": sync_result.conflict_bookmark, "remote": self.config.sync_remote},
+                        )
+                    else:
+                        warning = f"Post-commit sync failed: {sync_result.error}"
+                        logger.warning(
+                            "agent.post_commit_sync_failed",
+                            extra={"error": sync_result.error, "remote": self.config.sync_remote},
+                        )
+                except Exception as exc:
+                    warning = f"Post-commit sync error: {exc}"
+                    logger.exception("agent.post_commit_sync_error", extra={"remote": self.config.sync_remote})
+
         return RunResult(
             ok=True,
             updated=bool(changed_files),

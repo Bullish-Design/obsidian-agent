@@ -20,6 +20,8 @@ class AgentConfig(BaseSettings):
     flat_urls: bool = False
     deterministic_rate_limit: int = Field(default=120, ge=0)
     deterministic_rate_window_seconds: int = Field(default=60, gt=0)
+    sync_after_commit: bool = False
+    sync_remote: str = "origin"
     host: str = "127.0.0.1"
     port: int = Field(default=8081, ge=1, le=65535)
 

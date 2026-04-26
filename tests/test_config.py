@@ -25,6 +25,8 @@ def test_valid_config_from_kwargs(config_workspace: VaultWorkspace) -> None:
     assert cfg.flat_urls is False
     assert cfg.deterministic_rate_limit == 120
     assert cfg.deterministic_rate_window_seconds == 60
+    assert cfg.sync_after_commit is False
+    assert cfg.sync_remote == "origin"
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8081
 
@@ -42,6 +44,8 @@ def test_valid_config_from_env_vars(monkeypatch: pytest.MonkeyPatch, config_work
     monkeypatch.setenv("AGENT_FLAT_URLS", "true")
     monkeypatch.setenv("AGENT_DETERMINISTIC_RATE_LIMIT", "30")
     monkeypatch.setenv("AGENT_DETERMINISTIC_RATE_WINDOW_SECONDS", "10")
+    monkeypatch.setenv("AGENT_SYNC_AFTER_COMMIT", "true")
+    monkeypatch.setenv("AGENT_SYNC_REMOTE", "upstream")
     monkeypatch.setenv("AGENT_HOST", "0.0.0.0")
     monkeypatch.setenv("AGENT_PORT", "9090")
 
@@ -59,6 +63,8 @@ def test_valid_config_from_env_vars(monkeypatch: pytest.MonkeyPatch, config_work
     assert cfg.flat_urls is True
     assert cfg.deterministic_rate_limit == 30
     assert cfg.deterministic_rate_window_seconds == 10
+    assert cfg.sync_after_commit is True
+    assert cfg.sync_remote == "upstream"
     assert cfg.host == "0.0.0.0"
     assert cfg.port == 9090
 
@@ -111,6 +117,8 @@ def test_default_values(config_workspace: VaultWorkspace) -> None:
     assert cfg.flat_urls is False
     assert cfg.deterministic_rate_limit == 120
     assert cfg.deterministic_rate_window_seconds == 60
+    assert cfg.sync_after_commit is False
+    assert cfg.sync_remote == "origin"
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8081
 

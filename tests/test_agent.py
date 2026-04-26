@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from obsidian_ops import Vault
+from obsidian_ops import SyncResult, Vault
 from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
@@ -302,6 +302,139 @@ async def test_commit_uses_normalized_instruction_message(
     assert result.ok is True
     assert len(commit_messages) == 1
     assert commit_messages[0] == Agent._normalize_commit_message(instruction)
+
+
+async def test_post_commit_sync_success_when_enabled(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AgentConfig(vault_dir=Path(vault.root), sync_after_commit=True, sync_remote="upstream")
+    sync_agent = Agent(config, vault)
+
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    calls: list[str] = []
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    def sync_spy(remote: str = "origin") -> SyncResult:
+        calls.append(remote)
+        return SyncResult(ok=True)
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+    monkeypatch.setattr(vault, "sync", sync_spy)
+
+    with sync_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await sync_agent.run("Update note")
+
+    assert result.ok is True
+    assert result.warning is None
+    assert calls == ["upstream"]
+
+
+async def test_post_commit_sync_conflict_sets_warning(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AgentConfig(vault_dir=Path(vault.root), sync_after_commit=True)
+    sync_agent = Agent(config, vault)
+
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    def sync_conflict(remote: str = "origin") -> SyncResult:
+        _ = remote
+        return SyncResult(ok=False, conflict=True, conflict_bookmark="sync-conflict/2026-04-26T17-30-00Z")
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+    monkeypatch.setattr(vault, "sync", sync_conflict)
+
+    with sync_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await sync_agent.run("Update note")
+
+    assert result.ok is True
+    assert result.warning == "Post-commit sync conflict: sync-conflict/2026-04-26T17-30-00Z"
+
+
+async def test_post_commit_sync_skipped_when_disabled(agent: Agent, vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    def commit_noop(message: str) -> None:
+        _ = message
+
+    called = {"sync": False}
+
+    def sync_spy(remote: str = "origin") -> SyncResult:
+        _ = remote
+        called["sync"] = True
+        return SyncResult(ok=True)
+
+    monkeypatch.setattr(vault, "commit", commit_noop)
+    monkeypatch.setattr(vault, "sync", sync_spy)
+
+    with agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await agent.run("Update note")
+
+    assert result.ok is True
+    assert called["sync"] is False
+
+
+async def test_post_commit_sync_skipped_when_commit_failed(vault: Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AgentConfig(vault_dir=Path(vault.root), sync_after_commit=True)
+    sync_agent = Agent(config, vault)
+
+    turn = {"value": 0}
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        _ = messages, info
+        current = turn["value"]
+        turn["value"] += 1
+        if current == 0:
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": "note.md", "content": "updated"})])
+        return ModelResponse(parts=[TextPart("Done")])
+
+    called = {"sync": False}
+
+    def commit_fail(message: str) -> None:
+        _ = message
+        raise RuntimeError("commit failed")
+
+    def sync_spy(remote: str = "origin") -> SyncResult:
+        _ = remote
+        called["sync"] = True
+        return SyncResult(ok=True)
+
+    monkeypatch.setattr(vault, "commit", commit_fail)
+    monkeypatch.setattr(vault, "sync", sync_spy)
+
+    with sync_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
+        result = await sync_agent.run("Update note")
+
+    assert result.ok is True
+    assert result.warning is not None
+    assert "Commit failed" in result.warning
+    assert called["sync"] is False
 
 
 async def test_model_api_error_is_reported(agent: Agent) -> None:

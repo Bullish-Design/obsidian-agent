@@ -1,7 +1,9 @@
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
-from obsidian_agent.models import ApplyRequest, OperationResult, RunResult
+from obsidian_agent.models import ApplyRequest, Job, OperationResult, RunResult
 
 
 def test_run_result_defaults() -> None:
@@ -10,6 +12,21 @@ def test_run_result_defaults() -> None:
     assert result.changed_files == []
     assert result.error is None
     assert result.warning is None
+
+
+def test_job_defaults() -> None:
+    job = Job(
+        id="job-1",
+        operation="apply",
+        status="queued",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert job.started_at is None
+    assert job.finished_at is None
+    assert job.request == {}
+    assert job.result is None
+    assert job.error is None
 
 
 def test_operation_result_serialization() -> None:

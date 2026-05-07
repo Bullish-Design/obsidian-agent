@@ -18,6 +18,23 @@ class RunResult:
     warning: str | None = None
 
 
+JobStatus = Literal["queued", "running", "succeeded", "failed"]
+JobOperation = Literal["apply", "undo"]
+
+
+@dataclass
+class Job:
+    id: str
+    operation: JobOperation
+    status: JobStatus
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    request: dict = field(default_factory=dict)
+    result: RunResult | None = None
+    error: str | None = None
+
+
 class ApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

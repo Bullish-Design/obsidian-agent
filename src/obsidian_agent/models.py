@@ -248,3 +248,32 @@ class SyncResultResponse(BaseModel):
 class SyncStatusResponse(BaseModel):
     ok: bool = True
     status: dict
+
+
+class JobSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: JobOperation
+    payload: ApplyRequest | None = None
+
+
+class JobAcceptedResponse(BaseModel):
+    job_id: str
+    status: JobStatus
+    created_at: datetime
+
+
+class JobResponse(BaseModel):
+    id: str
+    operation: JobOperation
+    status: JobStatus
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    request: dict = Field(default_factory=dict)
+    result: OperationResult | None = None
+    error: str | None = None
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobResponse] = Field(default_factory=list)

@@ -182,6 +182,29 @@ def test_get_health(client: TestClient) -> None:
     assert data["status"] == "healthy"
 
 
+def test_submit_job_apply_and_get_status(client: TestClient) -> None:
+    submit = client.post("/v1/jobs", json={"operation": "apply", "payload": {"instruction": "Update note.md"}})
+    assert submit.status_code == 202
+    job_id = submit.json()["job_id"]
+
+    status_response = client.get(f"/v1/jobs/{job_id}")
+    assert status_response.status_code == 200
+    payload = status_response.json()
+    assert payload["id"] == job_id
+    assert payload["operation"] == "apply"
+    assert payload["status"] in {"queued", "running", "succeeded", "failed"}
+
+
+def test_submit_job_undo_and_list(client: TestClient) -> None:
+    submit = client.post("/v1/jobs", json={"operation": "undo"})
+    assert submit.status_code == 202
+
+    listed = client.get("/v1/jobs?limit=10")
+    assert listed.status_code == 200
+    jobs = listed.json()["jobs"]
+    assert len(jobs) >= 1
+
+
 def test_apply_response_schema(client: TestClient) -> None:
     response = client.post("/api/apply", json={"instruction": "Update note.md"})
 

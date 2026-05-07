@@ -11,7 +11,7 @@ from .config import AgentConfig
 from .models import ApplyRequest, HealthResponse, OperationResult
 from .queue import JobQueue
 from .rate_limit import RouteRateLimiter
-from .routes import agent_router, vault_router
+from .routes import agent_router, job_router, vault_router
 from .routes.agent_routes import handle_apply, handle_undo
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ def create_app(agent: Agent | None = None) -> FastAPI:
         return response
 
     app.include_router(agent_router)
+    app.include_router(job_router)
     app.include_router(vault_router)
 
     @app.post("/api/apply", response_model=OperationResult, deprecated=True)

@@ -1,11 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
 from obsidian_ops import Vault
-from obsidian_ops.errors import BusyError as VaultBusyError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from obsidian_agent.agent import Agent, BusyError
+from obsidian_agent.agent import Agent
 from obsidian_agent.app import create_app
 from obsidian_agent.config import AgentConfig
 from obsidian_agent.models import RunResult
@@ -285,50 +284,35 @@ def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch:
     assert data["error"] == "Operation timed out after 120s"
 
 
-def test_apply_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def busy_run(
+def test_apply_run_exception_returns_failed_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def failed_run(
         instruction: str,
         current_file: str | None = None,
         **kwargs,
     ) -> RunResult:
         _ = instruction, current_file, kwargs
-        raise BusyError("Another operation is already running")
+        raise RuntimeError("run exploded")
 
-    monkeypatch.setattr(client.app.state.agent, "run", busy_run)
+    monkeypatch.setattr(client.app.state.agent, "run", failed_run)
 
     response = client.post("/api/apply", json={"instruction": "Run concurrently"})
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Another operation is already running"
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert response.json()["error"] == "run exploded"
 
 
-def test_undo_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def busy_undo() -> RunResult:
-        raise BusyError("Another operation is already running")
+def test_undo_exception_returns_failed_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def failed_undo() -> RunResult:
+        raise RuntimeError("undo exploded")
 
-    monkeypatch.setattr(client.app.state.agent, "undo", busy_undo)
+    monkeypatch.setattr(client.app.state.agent, "undo", failed_undo)
 
     response = client.post("/api/undo")
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Another operation is already running"
-
-
-def test_apply_vault_busy_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def vault_busy_run(
-        instruction: str,
-        current_file: str | None = None,
-        **kwargs,
-    ) -> RunResult:
-        _ = instruction, current_file, kwargs
-        raise VaultBusyError("vault is busy elsewhere")
-
-    monkeypatch.setattr(client.app.state.agent, "run", vault_busy_run)
-
-    response = client.post("/api/apply", json={"instruction": "Run concurrently"})
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "vault is busy elsewhere"
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert response.json()["error"] == "undo exploded"
 
 
 def test_post_apply_mutates_file_on_disk(

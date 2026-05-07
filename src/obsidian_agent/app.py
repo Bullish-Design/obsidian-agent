@@ -9,6 +9,7 @@ from obsidian_ops import Vault
 from .agent import Agent
 from .config import AgentConfig
 from .models import ApplyRequest, HealthResponse, OperationResult
+from .queue import JobQueue
 from .rate_limit import RouteRateLimiter
 from .routes import agent_router, vault_router
 from .routes.agent_routes import handle_apply, handle_undo
@@ -23,11 +24,14 @@ def create_app(agent: Agent | None = None) -> FastAPI:
             app.state.agent = agent
             app.state.vault = agent.vault
             app.state.config = agent.config
+            app.state.job_queue = JobQueue(agent)
+            app.state.job_queue.start()
             app.state.rate_limiter = RouteRateLimiter(
                 max_events=agent.config.deterministic_rate_limit,
                 window_seconds=agent.config.deterministic_rate_window_seconds,
             )
             yield
+            await app.state.job_queue.stop()
             return
 
         config = AgentConfig()
@@ -35,11 +39,14 @@ def create_app(agent: Agent | None = None) -> FastAPI:
         app.state.agent = Agent(config, vault)
         app.state.vault = vault
         app.state.config = config
+        app.state.job_queue = JobQueue(app.state.agent)
+        app.state.job_queue.start()
         app.state.rate_limiter = RouteRateLimiter(
             max_events=config.deterministic_rate_limit,
             window_seconds=config.deterministic_rate_window_seconds,
         )
         yield
+        await app.state.job_queue.stop()
 
     app = FastAPI(lifespan=lifespan)
 

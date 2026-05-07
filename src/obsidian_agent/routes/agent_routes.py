@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from obsidian_ops.errors import BusyError as VaultBusyError
 
-from ..agent import Agent, BusyError
+from ..agent import Agent
 from ..interfaces import resolve_interface
 from ..models import ApplyRequest, OperationResult, RunResult
+from ..queue import JobQueue
 from ..scope import EditScope
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ def to_operation_result(result: RunResult) -> OperationResult:
 
 async def handle_apply(request: Request, payload: ApplyRequest) -> OperationResult:
     active_agent: Agent = request.app.state.agent
+    queue: JobQueue = request.app.state.job_queue
     interface_id = payload.interface_id or DEFAULT_INTERFACE_ID
 
     if payload.instruction is None or not payload.instruction.strip():
@@ -46,34 +48,41 @@ async def handle_apply(request: Request, payload: ApplyRequest) -> OperationResu
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        effective_current_file = payload.current_file
-        if effective_current_file is None and payload.scope is not None:
-            effective_current_file = payload.scope.path
+    effective_current_file = payload.current_file
+    if effective_current_file is None and payload.scope is not None:
+        effective_current_file = payload.scope.path
 
-        result = await active_agent.run(
-            payload.instruction,
-            effective_current_file,
-            interface_id=profile.id,
-            scope=payload.scope,
-            intent=payload.intent,
-            allowed_write_scope=payload.allowed_write_scope,
-            allowed_tool_names=profile.allowed_tool_names(payload.scope),
-            allowed_write_paths=_allowed_write_paths(payload.scope),
-            profile_prompt_suffix=profile.prompt_suffix(payload.scope, payload.intent),
-        )
-        return to_operation_result(result)
-    except (BusyError, VaultBusyError) as exc:
-        logger.warning(
-            "api.apply_busy_rejected",
-            extra={
-                "error": str(exc),
-                "has_current_file": bool(effective_current_file),
-                "interface_id": interface_id,
-                "has_scope": payload.scope is not None,
+    job = queue.submit(
+        "apply",
+        {
+            "instruction": payload.instruction,
+            "current_file": effective_current_file,
+            "kwargs": {
+                "interface_id": profile.id,
+                "scope": payload.scope,
+                "intent": payload.intent,
+                "allowed_write_scope": payload.allowed_write_scope,
+                "allowed_tool_names": profile.allowed_tool_names(payload.scope),
+                "allowed_write_paths": _allowed_write_paths(payload.scope),
+                "profile_prompt_suffix": profile.prompt_suffix(payload.scope, payload.intent),
             },
-        )
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        },
+    )
+    done_event = queue.get_done_event(job.id)
+    if done_event is None:
+        raise HTTPException(status_code=500, detail="job completion event missing")
+    timeout_s = active_agent.config.operation_timeout
+    try:
+        await asyncio.wait_for(done_event.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=f"Operation timed out after {timeout_s}s") from exc
+
+    completed = queue.get(job.id)
+    if completed is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if completed.result is not None:
+        return to_operation_result(completed.result)
+    return OperationResult(ok=False, updated=False, summary="", error=completed.error or "job failed")
 
 
 @agent_router.post("/apply", response_model=OperationResult)
@@ -83,9 +92,20 @@ async def apply_instruction(request: Request, payload: ApplyRequest) -> Operatio
 
 async def handle_undo(request: Request) -> OperationResult:
     active_agent: Agent = request.app.state.agent
+    queue: JobQueue = request.app.state.job_queue
+    job = queue.submit("undo", {})
+    done_event = queue.get_done_event(job.id)
+    if done_event is None:
+        raise HTTPException(status_code=500, detail="job completion event missing")
+    timeout_s = active_agent.config.operation_timeout
     try:
-        result = await active_agent.undo()
-        return to_operation_result(result)
-    except (BusyError, VaultBusyError) as exc:
-        logger.warning("api.undo_busy_rejected", extra={"error": str(exc)})
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await asyncio.wait_for(done_event.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=f"Operation timed out after {timeout_s}s") from exc
+
+    completed = queue.get(job.id)
+    if completed is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if completed.result is not None:
+        return to_operation_result(completed.result)
+    return OperationResult(ok=False, updated=False, summary="", error=completed.error or "job failed")

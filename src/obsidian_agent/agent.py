@@ -18,10 +18,6 @@ from .tools import VaultDeps, register_tools
 logger = logging.getLogger(__name__)
 
 
-class BusyError(Exception):
-    """Raised when the agent is already processing a request."""
-
-
 class Agent:
     """Agent orchestration layer.
 
@@ -36,8 +32,6 @@ class Agent:
             jj_bin=config.jj_bin,
             jj_timeout=config.jj_timeout,
         )
-        self._busy = False
-
         self._pydantic_agent = PydanticAgent(
             model=self._build_model(),
             deps_type=VaultDeps,
@@ -152,15 +146,6 @@ class Agent:
             return "obsidian-agent update"
         return normalized[:72]
 
-    def _acquire_busy(self) -> None:
-        if self._busy:
-            logger.warning("agent.busy_rejected")
-            raise BusyError("Another operation is already running")
-        self._busy = True
-
-    def _release_busy(self) -> None:
-        self._busy = False
-
     async def run(
         self,
         instruction: str,
@@ -174,7 +159,6 @@ class Agent:
         allowed_write_paths: set[str] | None = None,
         profile_prompt_suffix: str | None = None,
     ) -> RunResult:
-        self._acquire_busy()
         logger.info(
             "agent.run_start",
             extra={
@@ -220,8 +204,6 @@ class Agent:
                 summary="",
                 error=f"Operation timed out after {self.config.operation_timeout}s",
             )
-        finally:
-            self._release_busy()
 
     async def _run_impl(
         self,
@@ -321,7 +303,6 @@ class Agent:
         )
 
     async def undo(self) -> RunResult:
-        self._acquire_busy()
         logger.info("agent.undo_start")
         try:
             undo_result = self.vault.undo_last_change()
@@ -331,5 +312,3 @@ class Agent:
         except Exception as exc:
             logger.exception("agent.undo_failed")
             return RunResult(ok=False, updated=False, summary="", error=f"undo failed: {exc}")
-        finally:
-            self._release_busy()

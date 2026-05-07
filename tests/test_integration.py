@@ -137,8 +137,8 @@ async def test_http_integration_apply_and_undo(integration_agent: Agent, integra
     app = create_app(integration_agent)
     with integration_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
         with TestClient(app, raise_server_exceptions=False) as client:
-            apply_response = client.post("/api/apply", json={"instruction": "Write and verify undo"})
-            undo_response = client.post("/api/undo")
+            apply_response = client.post("/api/agent/apply", json={"instruction": "Write and verify undo"})
+            undo_response = client.post("/api/agent/undo")
 
     assert apply_response.status_code == 200
     assert undo_response.status_code == 200
@@ -161,7 +161,7 @@ async def test_http_integration_apply_write_path(integration_agent: Agent, integ
     app = create_app(integration_agent)
     with integration_agent._pydantic_agent.override(model=FunctionModel(model_fn)):
         with TestClient(app, raise_server_exceptions=False) as client:
-            response = client.post("/api/apply", json={"instruction": "Update Alpha through API"})
+            response = client.post("/api/agent/apply", json={"instruction": "Update Alpha through API"})
 
     assert response.status_code == 200
     payload = response.json()

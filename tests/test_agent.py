@@ -9,7 +9,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
 
-from obsidian_agent.agent import Agent, BusyError
+from obsidian_agent.agent import Agent
 from obsidian_agent.config import AgentConfig
 
 pytestmark = pytest.mark.anyio
@@ -146,20 +146,6 @@ async def test_changed_files_write_tools_tracked(agent: Agent) -> None:
         result = await agent.run("Update multiple files")
 
     assert sorted(result.changed_files) == ["new.md", "note.md"]
-
-
-async def test_busy_error_on_concurrent_run(agent: Agent) -> None:
-    async def slow_model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        _ = messages, info
-        await asyncio.sleep(0.3)
-        return ModelResponse(parts=[TextPart("done")])
-
-    with agent._pydantic_agent.override(model=FunctionModel(slow_model_fn)):
-        task = asyncio.create_task(agent.run("slow task"))
-        await asyncio.sleep(0.05)
-        with pytest.raises(BusyError):
-            await agent.run("second task")
-        await task
 
 
 async def test_vault_busy_error_propagates(agent: Agent, vault: Vault) -> None:
@@ -478,7 +464,6 @@ async def test_run_timeout_returns_error(vault: Vault, monkeypatch: pytest.Monke
 
     assert result.ok is False
     assert result.error == "Operation timed out after 1s"
-    assert timeout_agent._busy is False
 
 
 def test_normalize_commit_message() -> None:

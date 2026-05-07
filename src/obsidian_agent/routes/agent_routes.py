@@ -109,3 +109,8 @@ async def handle_undo(request: Request) -> OperationResult:
     if completed.result is not None:
         return to_operation_result(completed.result)
     return OperationResult(ok=False, updated=False, summary="", error=completed.error or "job failed")
+
+
+@agent_router.post("/undo", response_model=OperationResult)
+async def undo_instruction(request: Request) -> OperationResult:
+    return await handle_undo(request)

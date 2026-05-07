@@ -8,11 +8,10 @@ from obsidian_ops import Vault
 
 from .agent import Agent
 from .config import AgentConfig
-from .models import ApplyRequest, HealthResponse, OperationResult
+from .models import HealthResponse
 from .queue import JobQueue
 from .rate_limit import RouteRateLimiter
 from .routes import agent_router, job_router, vault_router
-from .routes.agent_routes import handle_apply, handle_undo
 
 logger = logging.getLogger(__name__)
 
@@ -69,16 +68,6 @@ def create_app(agent: Agent | None = None) -> FastAPI:
     app.include_router(agent_router)
     app.include_router(job_router)
     app.include_router(vault_router)
-
-    @app.post("/api/apply", response_model=OperationResult, deprecated=True)
-    async def legacy_apply(request: Request, payload: ApplyRequest) -> OperationResult:
-        logger.warning("api.legacy_apply_used", extra={"route": "/api/apply"})
-        return await handle_apply(request, payload)
-
-    @app.post("/api/undo", response_model=OperationResult, deprecated=True)
-    async def legacy_undo(request: Request) -> OperationResult:
-        logger.warning("api.legacy_undo_used", extra={"route": "/api/undo"})
-        return await handle_undo(request)
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:

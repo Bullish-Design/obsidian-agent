@@ -71,7 +71,7 @@ def client(app_workspace: VaultWorkspace, monkeypatch: pytest.MonkeyPatch) -> Te
 
 
 def test_post_apply_valid_request(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Update note.md"})
+    response = client.post("/api/agent/apply", json={"instruction": "Update note.md"})
 
     assert response.status_code == 200
     data = response.json()
@@ -79,7 +79,7 @@ def test_post_apply_valid_request(client: TestClient) -> None:
 
 
 def test_post_apply_empty_instruction(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "   "})
+    response = client.post("/api/agent/apply", json={"instruction": "   "})
 
     assert response.status_code == 200
     data = response.json()
@@ -89,7 +89,7 @@ def test_post_apply_empty_instruction(client: TestClient) -> None:
 
 def test_post_apply_with_current_file(client: TestClient) -> None:
     response = client.post(
-        "/api/apply",
+        "/api/agent/apply",
         json={"instruction": "Summarize this", "current_file": "note.md", "interface_id": "command"},
     )
 
@@ -110,7 +110,7 @@ def test_post_apply_with_scope_and_forge_web_interface(client: TestClient, monke
     monkeypatch.setattr(client.app.state.agent, "run", run_spy)
 
     response = client.post(
-        "/api/apply",
+        "/api/agent/apply",
         json={
             "instruction": "Summarize this section",
             "interface_id": "forge_web",
@@ -129,7 +129,7 @@ def test_post_apply_with_scope_and_forge_web_interface(client: TestClient, monke
 
 def test_post_apply_rejects_mismatched_scope_and_current_file(client: TestClient) -> None:
     response = client.post(
-        "/api/apply",
+        "/api/agent/apply",
         json={
             "instruction": "Summarize this",
             "current_file": "note.md",
@@ -141,32 +141,32 @@ def test_post_apply_rejects_mismatched_scope_and_current_file(client: TestClient
 
 
 def test_post_apply_with_invalid_current_file_returns_422(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "../note.md"})
+    response = client.post("/api/agent/apply", json={"instruction": "Summarize this", "current_file": "../note.md"})
 
     assert response.status_code == 422
 
 
 def test_post_apply_with_current_url_path_field_returns_422(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_url_path": "/vault/note"})
+    response = client.post("/api/agent/apply", json={"instruction": "Summarize this", "current_url_path": "/vault/note"})
 
     assert response.status_code == 422
 
 
 def test_post_apply_with_empty_interface_id_returns_422(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Summarize this", "interface_id": " "})
+    response = client.post("/api/agent/apply", json={"instruction": "Summarize this", "interface_id": " "})
 
     assert response.status_code == 422
 
 
 def test_post_apply_unknown_interface_id_returns_400(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Summarize this", "interface_id": "chat"})
+    response = client.post("/api/agent/apply", json={"instruction": "Summarize this", "interface_id": "chat"})
 
     assert response.status_code == 400
     assert response.json()["detail"] == "unsupported interface_id: chat"
 
 
 def test_post_undo(client: TestClient) -> None:
-    response = client.post("/api/undo")
+    response = client.post("/api/agent/undo")
 
     assert response.status_code == 200
     data = response.json()
@@ -206,7 +206,7 @@ def test_submit_job_undo_and_list(client: TestClient) -> None:
 
 
 def test_apply_response_schema(client: TestClient) -> None:
-    response = client.post("/api/apply", json={"instruction": "Update note.md"})
+    response = client.post("/api/agent/apply", json={"instruction": "Update note.md"})
 
     assert response.status_code == 200
     data = response.json()
@@ -220,7 +220,7 @@ def test_apply_response_schema(client: TestClient) -> None:
 
 
 def test_post_apply_missing_instruction_returns_200_error(client: TestClient) -> None:
-    response = client.post("/api/apply", json={})
+    response = client.post("/api/agent/apply", json={})
 
     assert response.status_code == 200
     data = response.json()
@@ -241,7 +241,7 @@ def test_post_apply_defaults_interface_to_command(client: TestClient, monkeypatc
 
     monkeypatch.setattr(client.app.state.agent, "run", run_spy)
 
-    response = client.post("/api/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
+    response = client.post("/api/agent/apply", json={"instruction": "Summarize this", "current_file": "note.md"})
 
     assert response.status_code == 200
     assert captured == [
@@ -299,7 +299,7 @@ def test_apply_timeout_returns_error_from_agent(client: TestClient, monkeypatch:
 
     monkeypatch.setattr(client.app.state.agent, "run", timeout_run)
 
-    response = client.post("/api/apply", json={"instruction": "Timeout me"})
+    response = client.post("/api/agent/apply", json={"instruction": "Timeout me"})
 
     assert response.status_code == 200
     data = response.json()
@@ -318,7 +318,7 @@ def test_apply_run_exception_returns_failed_result(client: TestClient, monkeypat
 
     monkeypatch.setattr(client.app.state.agent, "run", failed_run)
 
-    response = client.post("/api/apply", json={"instruction": "Run concurrently"})
+    response = client.post("/api/agent/apply", json={"instruction": "Run concurrently"})
 
     assert response.status_code == 200
     assert response.json()["ok"] is False
@@ -331,7 +331,7 @@ def test_undo_exception_returns_failed_result(client: TestClient, monkeypatch: p
 
     monkeypatch.setattr(client.app.state.agent, "undo", failed_undo)
 
-    response = client.post("/api/undo")
+    response = client.post("/api/agent/undo")
 
     assert response.status_code == 200
     assert response.json()["ok"] is False
@@ -354,7 +354,7 @@ def test_post_apply_mutates_file_on_disk(
     app = create_app(agent)
     with agent._pydantic_agent.override(model=write_note_model("# Test\nUpdated from API.\n")):
         with TestClient(app, raise_server_exceptions=False) as test_client:
-            response = test_client.post("/api/apply", json={"instruction": "Update note content"})
+            response = test_client.post("/api/agent/apply", json={"instruction": "Update note content"})
 
     assert response.status_code == 200
     payload = response.json()
